@@ -2,7 +2,7 @@ from email import header
 from sqlite3 import paramstyle
 import requests
 import os
-from openpyxl import load_workbook
+from openpyxl import load_workbook, Workbook
 import datetime as dt
 import copy
 from setup import ACCESS_TOKEN, CUSTOMORDER, PSWD, USERNAME, HEADERS, CUSTOMORDER_COPIED_FIELDS, MAIN_URL, PRODUCT, PRODUCTS_DB
@@ -10,6 +10,9 @@ import json
 import functools
 import operator
 
+"""Здесь где-то должен быть питоновский логгер, но я подключу его чуть позже, когда узнаю как им правильно пользоваться :D
+    Не везде есть проверка на 200 ответ от сервака при запросе, надо доделать.
+    Где-то еще можно добавить асинхронщины... Скорее всего в GET-запросах. Но если добавлять ее, то надо учитывать ограничения API моего склада (см документацию)"""
 
 class MyWHAPI():
 
@@ -33,13 +36,52 @@ class MyWHAPI():
         
     @staticmethod
     def to_query(params):    
+        """аргумент params передается в виде словаря, в котором все значения должны быть списками"""
         return ';'.join([f'{key}={item}' for key, item in zip(MyWHAPI.list_flatten([[key]*len(value) for key, value in params.items()]), MyWHAPI.list_flatten([x for x in params.values()]))])
+    
+    @staticmethod
+    def json_to_excel(json_data, **kwargs):
+        #пока что явно нужно указывать колонки, но наверное хорошо бы сделать какое-то значение по-умолчанию
+        data = MyWHAPI.json_load(json_data)
+        wb = Workbook()
+        ws = wb.active
+        if kwargs.get('columns'):
+            for n_row, row in enumerate(data):
+                for n_column, column in enumerate(kwargs['columns']):
+                    if n_row == 0:
+                        ws.cell(row=n_row+1, column=n_column+1, value=column)
+                    else:
+                        if not isinstance(row.get(column), str):
+                            continue
+                        else:
+                            ws.cell(row=n_row+1, column=n_column+1, value=row.get(column))
+
+            wb.save(kwargs.get('save_path') or f'{dt.datetime.now().strftime("%d-%m-%y %H-%M")}.xlsx')
+
+
+    @staticmethod
+    def json_load(json_data):
+        if isinstance(json_data, dict):
+            return json_data
+        if os.path.exists(json_data):
+            with open(json_data, 'r') as f:
+                try:
+                    return json.loads(f)
+                except json.decoder.JSONDecodeError as e:
+                    return e
+        else:
+            try:
+                return json.loads(json_data)
+            except json.decoder.JSONDecodeError as e:
+                return e
+
 
     def request(self, method, path, **kwargs):
         with self.session:
             return self.session.request(method=method, url=MAIN_URL + path, **kwargs)
 
     def get_products(self, params={},  **kwargs):
+        #здесь тоже надо будет отрефакторить загрузку json
         if os.path.exists(PRODUCTS_DB):
             with open(PRODUCTS_DB, 'r') as f:
                 db = json.load(f)
@@ -48,7 +90,7 @@ class MyWHAPI():
             with open(PRODUCTS_DB, 'w') as f:
                 json.dump(db, f, indent=4)
         result = []
-        missed = {}
+        missed = {} #вот этот цикл не очень эффективный, надо подумать как можно его переделать, чтобы не выглядело как кусок кала
         for key, value in params.items():
             for v in value:
                 item = list(filter(lambda x: x.get(key)==v, db))
@@ -60,7 +102,7 @@ class MyWHAPI():
                     else:
                         missed[key] = [v]
         if missed:
-            new = json.loads(self.request(method='GET', path=PRODUCT, params={'filter': self.to_query(missed)}).text)['rows']
+            new = json.loads(self.request(method='GET', path=PRODUCT, params={'filter': self.to_query(missed)}).text)['rows'] #вот этот запрос скорее всего можно делать не через фильтрацию в query, а через передачу фильтра в body, надо будет почитать документацию
             db.extend(new)
             result.extend(new)
             with open(PRODUCTS_DB, 'w') as f:
@@ -68,7 +110,7 @@ class MyWHAPI():
         return result
 
     def create_positions_fields(self, path, **kwargs):
-
+        #Вот эту функцию надо переделать в общий вид, потому что сейчас она делалась исключительно для 1 типа файлов.
         """Workbook structure must be:
             column # 1          2       3       4           5
                      article    name    units   unit_price  sum
@@ -108,7 +150,6 @@ class MyWHAPI():
 if __name__ =='__main__':
 
     mywh = MyWHAPI(USERNAME, PSWD)
-    response = mywh.create_customorder_body(copy_from='HGT-00001', name='HGT-00015', moment='2022-01-30 00:00:00', positions_data='Data/PSI 2021/Apr_0.xlsx')
-    #with open('Data/123.txt', 'w') as f:
-        
-    print('1')
+    #response = mywh.get_products(params={'pathName':['Товары интернет-магазинов/Настольные игры/CrowdGames']})
+    #mywh.json_to_excel(json.dumps(response), columns=['id', 'name', 'article'])
+    pass
