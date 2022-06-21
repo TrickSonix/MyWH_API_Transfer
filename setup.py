@@ -1,6 +1,6 @@
 ACCESS_TOKEN = '73ab45a1dc3655ee93f55cd6471f0c6ab34cb6ab'
-USERNAME = 'tricksonix@crowdgames'
-PSWD = 'Dr9lFN1b'
+USERNAME = 'tricksonix@gmail.com'
+PSWD = 'rulethemall007+'
 PRODUCTS_DB = 'Data/products.json'
 HEADERS = {"Content-Type": "application/json", "User-Agent": "myWHAPI_app/0.0.1",
                        "Connection": "keep-alive", "Accept-Encoding": "gzip, deflate, br", "Accept":"*/*"}
