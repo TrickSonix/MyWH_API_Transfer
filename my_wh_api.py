@@ -1,18 +1,23 @@
-from email import header
+from distutils.debug import DEBUG
 from sqlite3 import paramstyle
 import requests
 import os
 from openpyxl import load_workbook, Workbook
 import datetime as dt
-import copy
-from setup import ACCESS_TOKEN, CUSTOMORDER, PSWD, USERNAME, HEADERS, CUSTOMORDER_COPIED_FIELDS, MAIN_URL, PRODUCT, PRODUCTS_DB
+from setup import CUSTOMORDER, PSWD, USERNAME, HEADERS, CUSTOMORDER_COPIED_FIELDS, MAIN_URL, PRODUCT, PRODUCTS_DB
 import json
 import functools
 import operator
+from logger import setup_logger
+from logging import DEBUG
 
-"""Здесь где-то должен быть питоновский логгер, но я подключу его чуть позже, когда узнаю как им правильно пользоваться :D
-    Не везде есть проверка на 200 ответ от сервака при запросе, надо доделать.
+
+"""Нужно будет протестировать изменения в коде и дальше уже пилить заполнение тела для разных запросов и распарса json'a из базы.
+    Позже пойму где еще нужно добавить логгирование.
     Где-то еще можно добавить асинхронщины... Скорее всего в GET-запросах. Но если добавлять ее, то надо учитывать ограничения API моего склада (см документацию)"""
+
+basic_logger = setup_logger('basic_logger', 'logs/my_wh_api.log', DEBUG)
+
 
 class MyWHAPI():
 
@@ -25,10 +30,6 @@ class MyWHAPI():
     @staticmethod
     def status_check(response):
         return response.status_code == requests.codes.ok
-
-    # def start_session(self):
-    #     self.session = requests.Session()
-    #     self.session.auth = (self.username, self.pswd)
             
     @staticmethod
     def list_flatten(list_2):
@@ -55,12 +56,14 @@ class MyWHAPI():
                             continue
                         else:
                             ws.cell(row=n_row+1, column=n_column+1, value=row.get(column))
-
-            wb.save(kwargs.get('save_path') or f'{dt.datetime.now().strftime("%d-%m-%y %H-%M")}.xlsx')
+            filename = kwargs.get('save_path') or f'{dt.datetime.now().strftime("%d-%m-%y %H-%M")}.xlsx' 
+            wb.save(filename)
+            basic_logger.info(f'File {filename} was written.')
 
 
     @staticmethod
     def json_load(json_data):
+        json_logger = setup_logger('json_logger', f"{dt.datetime.now().strftime('%Y-%m-%d %H-%M-%S')}_json.log", DEBUG)
         if isinstance(json_data, dict):
             return json_data
         if os.path.exists(json_data):
@@ -68,45 +71,49 @@ class MyWHAPI():
                 try:
                     return json.loads(f)
                 except json.decoder.JSONDecodeError as e:
-                    return e
+                    json_logger.error(e)
+                    json_logger.debug(f'JSON_data: *json*{json_data}*json*')
+                    return {}
         else:
             try:
                 return json.loads(json_data)
             except json.decoder.JSONDecodeError as e:
-                return e
+                json_logger.error(e)
+                json_logger.debug(f'JSON_data: *json*{json_data}*json*')
+                return {}
 
 
     def request(self, method, path, **kwargs):
+        request_logger = setup_logger('request_logger', f"{dt.datetime.now().strftime('%Y-%m-%d %H-%M-%S')}_request.log", DEBUG)
+        request_logger.info(f'URL: {response.url}. Status code {response.status_code}')
+        request_logger.debug(f'Response text: *json*{response.text}*json*')
+        
         with self.session:
-            return self.session.request(method=method, url=MAIN_URL + path, **kwargs)
+            response = self.session.request(method=method, url=MAIN_URL + path, **kwargs)
+            response.raise_for_status()
+            return response
 
     def get_products(self, params={},  **kwargs):
-        #здесь тоже надо будет отрефакторить загрузку json
-        if os.path.exists(PRODUCTS_DB):
-            with open(PRODUCTS_DB, 'r') as f:
-                db = json.load(f)
-        else:
-            db = json.loads(self.request(method='GET', path=PRODUCT, params={'filter': self.to_query(params)}).text)['rows']
-            with open(PRODUCTS_DB, 'w') as f:
-                json.dump(db, f, indent=4)
+        """аргумент params передается в виде словаря, в котором все значения должны быть списками"""
+        db = self.json_load(PRODUCTS_DB)
         result = []
-        missed = {} #вот этот цикл не очень эффективный, надо подумать как можно его переделать, чтобы не выглядело как кусок кала
+        missed = {}
+        if not db:
+            response = self.request(method='GET', path=PRODUCT, params={'filter': self.to_query(params)})
+            db = self.json_load(response.json()).get('rows')
         for key, value in params.items():
-            for v in value:
-                item = list(filter(lambda x: x.get(key)==v, db))
-                if item:
-                    result.extend(item)
-                else:
-                    if missed.get(key):
-                        missed[key].append(v)
-                    else:
-                        missed[key] = [v]
-        if missed:
-            new = json.loads(self.request(method='GET', path=PRODUCT, params={'filter': self.to_query(missed)}).text)['rows'] #вот этот запрос скорее всего можно делать не через фильтрацию в query, а через передачу фильтра в body, надо будет почитать документацию
+    
+            items = list(filter(lambda x: x.get(key) in value, db))
+            result.extend(items)
+            missed[key] = [x for x in value if x not in [x.get(key) for x in items]]
+        
+        if self.list_flatten(missed.values()):
+            new_response = self.request(method='GET', path=PRODUCT, params={'filter': self.to_query(missed)})
+            new = self.json_load(new_response.json()).get('rows')
             db.extend(new)
             result.extend(new)
-            with open(PRODUCTS_DB, 'w') as f:
-                json.dump(db, f, indent=4)
+        with open(PRODUCTS_DB, 'w') as f:
+            json.dump(db, f, indent=4)
         return result
 
     def create_positions_fields(self, path, **kwargs):
@@ -132,24 +139,26 @@ class MyWHAPI():
         return result
 
     def create_customorder_body(self, copy_from=None, **kwargs):
+        json_logger = setup_logger('json_logger', f"{dt.datetime.now().strftime('%Y-%m-%d %H-%M-%S')}_json.log", DEBUG)
         if copy_from:
             copied_order = self.request(
                 method='GET', path=CUSTOMORDER, params={'search': copy_from}, headers=kwargs.get('headers'))
-            if self.status_check(copied_order):
-                copied_body = copied_order.json()
-                result = {x:copied_body['rows'][0][x] for x in copied_body['rows'][0] if x in CUSTOMORDER_COPIED_FIELDS}
-                result['name'] = kwargs.get('name')
-                result['positions'] = self.create_positions_fields(kwargs.get('positions_data'))
-                result['moment'] = kwargs.get('moment') or dt.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                result['description'] = kwargs.get('description')
-                return json.dumps(result, indent=4)
-            else:
-                return copied_order.status_code
+            copied_body = copied_order.json()
+            result = {x:copied_body['rows'][0][x] for x in copied_body['rows'][0] if x in CUSTOMORDER_COPIED_FIELDS}
+            result['name'] = kwargs.get('name')
+            result['positions'] = self.create_positions_fields(kwargs.get('positions_data'))
+            result['moment'] = kwargs.get('moment') or dt.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            result['description'] = kwargs.get('description')
+            json_logger.debug(f'Customorder body: *json*{result}*json*')
+            return json.dumps(result, indent=4)
+        else:
+            return {}
 
 
 if __name__ =='__main__':
 
+    
     mywh = MyWHAPI(USERNAME, PSWD)
     #response = mywh.get_products(params={'pathName':['Товары интернет-магазинов/Настольные игры/CrowdGames']})
     #mywh.json_to_excel(json.dumps(response), columns=['id', 'name', 'article'])
-    pass
+    basic_logger.info('Finish')
