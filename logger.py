@@ -1,6 +1,6 @@
 import logging
-import pyjsonviewer
-import os
+#import pyjsonviewer
+#import os
 
 formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
 

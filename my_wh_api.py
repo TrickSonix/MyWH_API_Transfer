@@ -1,10 +1,8 @@
-from distutils.debug import DEBUG
-from sqlite3 import paramstyle
 import requests
 import os
 from openpyxl import load_workbook, Workbook
 import datetime as dt
-from setup import CUSTOMORDER, PSWD, USERNAME, HEADERS, CUSTOMORDER_COPIED_FIELDS, MAIN_URL, PRODUCT, PRODUCTS_DB
+from setup import REQUEST_LINKS, PSWD, USERNAME, HEADERS, CUSTOMORDER_COPIED_FIELDS, MAIN_URL, PRODUCTS_DB, MAX_DATA_SIZE
 import json
 import functools
 import operator
@@ -14,7 +12,9 @@ from logging import DEBUG
 
 """Нужно будет протестировать изменения в коде и дальше уже пилить заполнение тела для разных запросов и распарса json'a из базы.
     Позже пойму где еще нужно добавить логгирование.
-    Где-то еще можно добавить асинхронщины... Скорее всего в GET-запросах. Но если добавлять ее, то надо учитывать ограничения API моего склада (см документацию)"""
+    Где-то еще можно добавить асинхронщины... Скорее всего в GET-запросах. Но если добавлять ее, то надо учитывать ограничения API моего склада (см документацию)
+    
+    Поскольку я таки пришел к тому что сделал БД для переноса, нужно будет туда напихать все справочники из моего склада, чтобы не делать запрос к апи каждый раз"""
 
 basic_logger = setup_logger('basic_logger', 'logs/my_wh_api.log', DEBUG)
 
@@ -82,7 +82,6 @@ class MyWHAPI():
                 json_logger.debug(f'JSON_data: *json*{json_data}*json*')
                 return {}
 
-
     def request(self, method, path, **kwargs):
         request_logger = setup_logger('request_logger', f"{dt.datetime.now().strftime('%Y-%m-%d %H-%M-%S')}_request.log", DEBUG)
         request_logger.info(f'URL: {response.url}. Status code {response.status_code}')
@@ -95,11 +94,11 @@ class MyWHAPI():
 
     def get_products(self, params={},  **kwargs):
         """аргумент params передается в виде словаря, в котором все значения должны быть списками"""
-        db = self.json_load(PRODUCTS_DB)
+        db = self.json_load(PRODUCTS_DB) 
         result = []
         missed = {}
         if not db:
-            response = self.request(method='GET', path=PRODUCT, params={'filter': self.to_query(params)})
+            response = self.request(method='GET', path=REQUEST_LINKS['PRODUCT'], params={'filter': self.to_query(params)})
             db = self.json_load(response.json()).get('rows')
         for key, value in params.items():
     
@@ -108,7 +107,7 @@ class MyWHAPI():
             missed[key] = [x for x in value if x not in [x.get(key) for x in items]]
         
         if self.list_flatten(missed.values()):
-            new_response = self.request(method='GET', path=PRODUCT, params={'filter': self.to_query(missed)})
+            new_response = self.request(method='GET', path=REQUEST_LINKS['PRODUCT'], params={'filter': self.to_query(missed)})
             new = self.json_load(new_response.json()).get('rows')
             db.extend(new)
             result.extend(new)
@@ -116,7 +115,7 @@ class MyWHAPI():
             json.dump(db, f, indent=4)
         return result
 
-    def create_positions_fields(self, path, **kwargs):
+    def create_positions_fields_from_excel(self, path, **kwargs):
         #Вот эту функцию надо переделать в общий вид, потому что сейчас она делалась исключительно для 1 типа файлов.
         """Workbook structure must be:
             column # 1          2       3       4           5
@@ -142,7 +141,7 @@ class MyWHAPI():
         json_logger = setup_logger('json_logger', f"{dt.datetime.now().strftime('%Y-%m-%d %H-%M-%S')}_json.log", DEBUG)
         if copy_from:
             copied_order = self.request(
-                method='GET', path=CUSTOMORDER, params={'search': copy_from}, headers=kwargs.get('headers'))
+                method='GET', path=REQUEST_LINKS['CUSTOMORDER'], params={'search': copy_from}, headers=kwargs.get('headers'))
             copied_body = copied_order.json()
             result = {x:copied_body['rows'][0][x] for x in copied_body['rows'][0] if x in CUSTOMORDER_COPIED_FIELDS}
             result['name'] = kwargs.get('name')
@@ -154,6 +153,9 @@ class MyWHAPI():
         else:
             return {}
 
+    def create_json_data_body(self):
+        #Это оказалось несколько сложнее чем я думал.... Нужно обмозговать как следует
+        pass
 
 if __name__ =='__main__':
 
