@@ -1,0 +1,16 @@
+{
+    "#type": "jcfg:DocumentObject.ПоступлениеБезналичныхДенежныхСредств",
+    "meta": "#mywh/meta",
+    "agent": "#value/Контрагент->#mywh/meta",
+    "agentAccount": "#value/БанковскийСчетКонтрагента->#mywh/meta",
+    "applicable": "#value/Posted",
+    "moment": "#value/Date",
+    "organization": "#value/Организация->#mywh/meta",
+    "organizationAccount": "#value/БанковскийСчет->#mywh/meta",
+    "shared": true,
+    "store": "#value/Склад->#mywh/meta",
+    "sum": "#value/СуммаДокумента",
+    "operations": {
+        "meta": "#value/РасшифровкаПлатежа:ОснованиеПлатежа/#value->#mywh/meta"
+    }
+}

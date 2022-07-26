@@ -1,0 +1,5 @@
+{
+    "#type": "jcfg:CatalogObject.Склады",
+    "meta": "#mywh/meta",
+    "name": "#value/Description"
+}

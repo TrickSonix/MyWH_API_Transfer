@@ -1,0 +1,15 @@
+{   
+    "#type": "jcfg:DocumentObject.ОприходованиеИзлишковТоваров",
+    "meta": "#mywh/meta",
+    "moment": "#value/Date",
+    "organization": "#value/Организация->#mywh/meta",
+    "applicable": "#value/Posted",
+    "positions": {
+        "assortment": "#value/Товары:Номенклатура->#mywh/meta",
+        "price": "#value/Товары:Цена",
+        "quantity": "#value/Товары:Количество"
+    },
+    "shared": true,
+    "store": "#value/Склад->#mywh/meta",
+    "description": "#value/Комментарий"
+}

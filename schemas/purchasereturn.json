@@ -1,0 +1,19 @@
+{
+    "#type": "jcfg:DocumentObject.ВозвратТоваровПоставщику",
+    "meta": "#mywh/meta",
+    "agent": "#value/Контрагент->#mywh/meta",
+    "agentAccount": "#value/БанковскийСчетКонтрагента->#mywh/meta",
+    "applicable": "#value/Posted",
+    "moment": "#value/Date",
+    "organization": "#value/Организация->#mywh/meta",
+    "organizationAccount": "#value/БанковскийСчетОрганизации->#mywh/meta",
+    "positions": {
+        "assortment": "#value/Товары:Номенклатура->#mywh/meta",
+        "price": "#value/Товары:Цена",
+        "quantity": "#value/Товары:Количество",
+        "vat": "#value/Товары:СтавкаНДС"
+    },
+    "shared": true,
+    "store": "#value/Склад->#mywh/meta",
+    "supply": "#value/Товары:ДокументПоступления->#mywh/meta"
+}

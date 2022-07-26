@@ -1,0 +1,6 @@
+{
+    "#type": "jcfg:ChartOfCharacteristicTypesObject.СтатьиРасходов",
+    "meta": "#mywh/meta",
+    "name": "#value/Description",
+    "description": "#value/Описание"
+}

@@ -1,0 +1,25 @@
+{
+    "#type": "jcfg:DocumentObject.РеализацияТоваровУслуг",
+    "meta": "#mywh/meta",
+    "agent": "#value/Контрагент->#mywh/meta",
+    "agentAccount": "#value/БанковскийСчетКонтрагента->#mywh/meta",
+    "applicable": "#value/Posted",
+    "moment": "#value/Date",
+    "organization": "#value/Организация->#mywh/meta",
+    "organizationAccount": "#value/БанковскийСчетОрганизации->#mywh/meta",
+    "positions": [
+        {
+            "#value/Товары": {
+                "#type": "jcfg:CatalogObject.Номенклатура",
+                "assortment": "Номенклатура->#mywh/meta",
+                "price": "Цена",
+                "quantity": "Количество",
+                "reserve": "ВариантОбеспечения->Количество",
+                "vat": "#value/СтавкаНДС"
+            }
+        }
+    ],
+    "shared": true,
+    "store": "#value/Склад->#mywh/meta",
+    "customerOrder": "#value/Товары:ЗаказКлиента/#value->#mywh/meta"
+}

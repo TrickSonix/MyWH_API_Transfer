@@ -1,0 +1,15 @@
+{
+    "#type": "jcfg:CatalogObject.Контрагенты",
+    "meta": "#mywh/meta",
+    "accounts": {
+        "#type": "jcfg:CatalogObject.БанковскиеСчетаКонтрагентов",
+        "accountNumber": "#value/НомерСчета",
+        "bankName": "#value/Банк->#value/Description"
+    },
+    "name": "#value/Description",
+    "companyType": "#value/ЮрФизЛицо",
+    "inn": "#value/ИНН",
+    "kpp": "#value/КПП",
+    "shared": true,
+    "okpo": "#value/КодПоОКПО"
+}

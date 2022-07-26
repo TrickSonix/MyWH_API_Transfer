@@ -1,0 +1,14 @@
+{   
+    "#type": "jcfg:DocumentObject.СписаниеНедостачТоваров",
+    "meta": "#mywh/meta",
+    "moment": "#value/Date",
+    "organization": "#value/Организация->#mywh/meta",
+    "applicable": "#value/Posted",
+    "positions": {
+        "assortment": "#value/Товары:Номенклатура->#mywh/meta",
+        "quantity": "#value/Товары:Количество"
+    },
+    "shared": true,
+    "store": "#value/Склад->#mywh/meta",
+    "description": "#value/Комментарий"
+}

@@ -1,0 +1,15 @@
+{
+    "#type": "jcfg:CatalogObject.Организации",
+    "meta": "#mywh/meta",
+    "name": "#value/Description",
+    "companyType": "entrepreneur",
+    "inn": "#value/ИНН",
+    "okpo": "#value/КодПоОКПО",
+    "ogrnip": "#value/ОГРН",
+    "accounts": {
+        "#type": "jcfg:CatalogObject.БанковскиеСчетаОрганизаций",
+        "meta": "#mywh/meta",
+        "accountNumber": "#value/НомерСчета",
+        "bankName": "#value/Банк->#value/Description"
+    }
+}

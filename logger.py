@@ -15,10 +15,3 @@ def setup_logger(name, log_file, level=logging.INFO):
     logger.addHandler(handler)
 
     return logger
-
-def view_json_from_log(filename): #Рот ебал этого модуля для отображения json, нихуя не понял почему он не работает...
-    pass
-
-        
-if __name__ == '__main__':
-    view_json_from_log('logs/123.log')

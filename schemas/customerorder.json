@@ -1,0 +1,19 @@
+{
+    "#type": "jcfg:DocumentObject.ЗаказКлиента",
+    "meta": "#mywh/meta",
+    "agent": "#value/Контрагент->#mywh/meta",
+    "agentAccount": "#value/БанковскийСчетКонтрагента->#mywh/meta",
+    "applicable": "#value/Posted",
+    "moment": "#value/Date",
+    "organization": "#value/Организация->#mywh/meta",
+    "organizationAccount": "#value/БанковскийСчетОрганизации->#mywh/meta",
+    "positions": {
+        "assortment": "#value/Товары:Номенклатура->#mywh/meta",
+        "price": "#value/Товары:Цена",
+        "quantity": "#value/Товары:Количество",
+        "reserve": "#value/Товары:ВариантОбеспечения->Количество",
+        "vat": "СтавкаНДС"
+    },
+    "shared": true,
+    "store": "#value/Склад->#mywh/meta"
+}
