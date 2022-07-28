@@ -1,10 +1,11 @@
+from ftplib import error_perm
 import requests
 import os
 import sys
 import time
 from openpyxl import load_workbook, Workbook
 import datetime as dt
-from setup import REQUEST_LINKS, PSWD, USERNAME, HEADERS, CUSTOMERORDER_COPIED_FIELDS, MAIN_URL, PRODUCTS_DB, MAX_DATA_SIZE, REQUESTS_SECONDS_RESTRICTION, REQUESTS_LIMIT, TIMEOUT_TIME
+from setup import COLLECTIONS_COMPARE, REQUEST_LINKS, PSWD, USERNAME, HEADERS, CUSTOMERORDER_COPIED_FIELDS, MAIN_URL, PRODUCTS_DB, MAX_DATA_SIZE, REQUESTS_SECONDS_RESTRICTION, REQUESTS_LIMIT, TIMEOUT_TIME, MAX_ITEM_COUNT
 import json
 import functools
 import operator
@@ -13,6 +14,7 @@ from logging import DEBUG
 from ratelimit import limits
 from ratelimit.exception import RateLimitException
 from db_server import CrowdGamesDB
+from utils import JSONPermute
 
 
 """Нужно будет протестировать изменения в коде и дальше уже пилить заполнение тела для разных запросов и распарса json'a из базы.
@@ -93,10 +95,10 @@ class MyWHAPI:
 
     @staticmethod
     def json_load(json_data):
-        if isinstance(json_data, dict):
+        if isinstance(json_data, dict) or isinstance(json_data, list):
             return json_data
         if os.path.exists(json_data):
-            with open(json_data, 'r') as f:
+            with open(json_data, 'r', encoding='utf-8') as f:
                 try:
                     return json.load(f)
                 except json.decoder.JSONDecodeError as e:
@@ -195,68 +197,112 @@ class MyWHAPI:
         else:
             return {}
     #Все что ниже херня и не работает
-    # def create_body(self, item, path, body_schema : dict):
+  
+    def create_json_data_body(self, schema, **kwargs):
+        #Это оказалось несколько сложнее чем я думал.... Нужно обмозговать как следует
+        body_schema = self.json_load(f'schemas/{schema.lower()}.json')
+        data_body = []
+        try:
+            item_type = body_schema["#type"].split('.')[0].split(':')[-1]
+            if kwargs.get('query'):
+                new_query = kwargs.get('query')
+                new_query.update({"#type": body_schema['#type']})
+            else:
+                new_query = {"#type": body_schema['#type']}
+            items = DB.get_items(item_type, new_query)
+        except Exception as e: #нужно будет позже понять какие ошибки тут отлавливать
+            new_query = kwargs.get('query')
+            basic_logger.exception(f'{e}', exc_info=True)
+            basic_logger.debug(f'Body schema: {body_schema}. Query: {new_query}')
+            return {}
+        res = []
+        for item in items:
+            perm = JSONPermute(item, schema.lower(), DB)
+            if sys.getsizeof(res) > MAX_DATA_SIZE or len(res) == MAX_ITEM_COUNT:
+                data_body.append(res)
+                res = []
+            permuted_data = perm.permute()
+            item_ref = item['#value']['Ref']
+            res.append((item_ref, permuted_data))
+            ref_type = item['#type']
+            json_logger.debug(f'{ref_type} item with ref {item_ref} was permuted into {permuted_data}')
+        if not data_body:
+            data_body.append(res)
         
-    #     temp = {}
-    #     for key, path in body_schema.items():
-    #         if '#' in key:
-    #             continue
-    #         if isinstance(path, dict):
-    #             self.create_body(item,)
-    #         field = self.get_field_from_item(item, path)
-    #         if field:
-    #             temp[key] = field
-        # if isinstance(path, dict):
-        #     for key, p in path.items(): 
-        #         yield key, next(self.get_field_from_item(item, p))
-        # elif isinstance(path, str):
-        #     entity_list = path.split('->')
-        #     if len(entity_list) == 1:
-        #         entity_list = entity_list[0].split('/')
-
-
-    # def create_json_data_body(self, schema, **kwargs):
-    #     #Это оказалось несколько сложнее чем я думал.... Нужно обмозговать как следует
-    #     body_schema = self.json_load(f'schemas/{schema.lower()}.json')
-    #     data_body = []
-    #     try:
-    #         item_type = body_schema["#type"].split('.')[0].split(':')[-1]
-    #         if kwargs.get('query'):
-    #             query = kwargs.get('query').update({"#type": body_schema['#type']})
-    #         else:
-    #             query = {"#type": body_schema['#type']}
-    #         items = DB.get_items(item_type, query)
-    #     except Exception as e: #нужно будет позже понять какие ошибки тут отлавливать
-    #         basic_logger.exception(f'{e}', exc_info=True)
-    #         basic_logger.debug(f'Body schema: {body_schema}. Query: {query}')
-    #         return {}
-    #     res = []
-    #     for item in items:
-    #         if sys.getsizeof(res) > MAX_DATA_SIZE:
-    #             data_body.append(res)
-    #             res = []
-    #         #res.append((temp, item['#value']['Ref']))
-    #     if not data_body:
-    #         data_body.append(res)
-    #     return data_body
-
-
-
+        return data_body
     
     def migrate(self, schema, path, **kwargs):
-        data = self.create_json_data_body(schema=schema, **kwargs)
-        for d, ref in data:
-            response = self.request(method='POST', path=path, data=d)
+        if schema.lower() == 'product':
+            query = {"#value.ТипНоменклатуры": "Товар"}
+        elif schema.lower() == 'service':
+            query = {"#value.ТипНоменклатуры": "Услуга"}
+        else:
+            query = {}
+        data = self.create_json_data_body(schema=schema, query=query, **kwargs)
+        error_count = 0
+        for d in data:
+            bodys = [x[1] for x in d]
+            refs = [x[0] for x in d]
+            response = self.request(method='POST', path=path, data=json.dumps(bodys))
             if response.status_code is None:
                 basic_logger.warning(f'Something goes wrong with {schema} migration.')
+                basic_logger.debug(f'Item Ref: {d[0]}')
+                error_count +=1
+            else:
+                for ref, resp in zip(refs, response.json()):
+                    meta = resp.get('meta')
+                    update = DB.update_item(ref, meta)
+                    if update:
+                        basic_logger.info(f'Success in update {ref} item')
+                    else:
+                        basic_logger.info(f'Fail in update to DB {ref} item')
+                        basic_logger.debug(f'Passed data: !{meta}!')
+                        error_count +=1
+                    if schema.lower() == 'organization' or schema.lower() == 'counterparty':
+                        accounts = self.request("GET", '/'.join(['', *resp['accounts']['meta']['href'].split('/')[-4:]]))
+                        if accounts.status_code is None:
+                            basic_logger.warning(f'Something goes wrong with {schema} migration on bank account request.')
+                            error_count +=1
+                        for acc in accounts.json()['rows']:
+                            acc_meta = acc['meta']
+                            acc_ref = acc['bankLocation']
+                            update_acc = DB.update_item(acc_ref, acc_meta)
+                            if update_acc:
+                                basic_logger.info(f'Success in update {acc_ref} item')
+                            else:
+                                basic_logger.info(f'Fail in update to DB {acc_ref} item')
+                                basic_logger.debug(f'Passed data: !{acc_meta}!')
+                                error_count +=1
+        return error_count
+            
 
 
     def db_migrate(self, **kwargs):
         for entity, path in REQUEST_LINKS.items():
             basic_logger.info(f'Start migrating {entity} entity.')
-            self.migrate(schema=entity, path=path, **kwargs)
-            basic_logger.info(f'{entity} entity succesefully migrated.')
+            errors = self.migrate(schema=entity, path=path, **kwargs)
+            if errors == 0:
+                basic_logger.info(f'{entity} entity succesefully migrated.')
+            else:
+                basic_logger.info(f'{entity} was migrated with {errors} errors.')
+            input('Press any key to continue')
 
+    # def ctrl_z(self):
+    #     for collection in COLLECTIONS_COMPARE.items():
+    #         items = DB.get_items(collection, {"#mywh": {"&exists": True}})
+    #         data_body = []
+    #         res = []
+    #         for item in items:
+    #             if sys.getsizeof(res) > MAX_DATA_SIZE or len(res) == MAX_ITEM_COUNT:
+    #                 data_body.append(res)
+    #                 res = []
+    #             res.append(({'meta': item['#mywh']['meta']}))
+    #             if not data_body:
+    #                 data_body.append(res)
+    #         for d in data_body:
+    #             response = self.request(method='POST', path='/'.join([*d["metadataHref"].split('/')[:-1], 'delete']), data=json.dumps(d))
+    #             if response.status_code is None:
+    #                 basic_logger.warning(f'Something goes wrong with {collection} delete.')
 
 if __name__ =='__main__':
 
@@ -264,4 +310,5 @@ if __name__ =='__main__':
     mywh = MyWHAPI(USERNAME, PSWD)
     #response = mywh.get_products(params={'pathName':['Товары интернет-магазинов/Настольные игры/CrowdGames']})
     #mywh.json_to_excel(json.dumps(response), columns=['id', 'name', 'article'])
+    mywh.db_migrate()
     basic_logger.info('Finish')

@@ -28,7 +28,6 @@ class CrowdGamesDB:
 
     def __init__(self, db='CrowdGamesDB') -> None:
         self.client = MongoClient('localhost', 27017)
-        self.session = self.client.start_session()
         self.db = db
 
     def import_db(self, db_path = 'D:\Никита\Работа\CrowdGames\JSON_DB', stop_by_error=False):
@@ -40,7 +39,7 @@ class CrowdGamesDB:
             if '.' not in directory:
                 
                 db_logger.info(f'Current working directory: {directory}')
-                with self.session as session:
+                with self.client.start_session() as session:
                     collection = self.client[self.db][directory]
                     for subdirectory in os.listdir(f'{db_path}\{directory}'):
                         db_logger.info(f'Current working directory: {directory}\{subdirectory}')
@@ -76,19 +75,48 @@ class CrowdGamesDB:
             db_logger.info(f'Database import was successeful. With {error_count} errors.')
 
     def get_items(self, collection, query):
-        with self.session as session:
+        with self.client.start_session() as session:
             for result in self.client[self.db][COLLECTIONS_COMPARE.get(collection) or collection].find(query, session=session):
                 yield result
 
     def find_by_guid(self, guid):
-        with self.session as session:
-            for collection in COLLECTIONS_COMPARE.values():
-                for result in self.client[self.db][collection].find({"#value.Ref": guid}, session=session):
-                    yield result
+        if is_guid(guid):
+            with self.client.start_session() as session:
+                for collection in COLLECTIONS_COMPARE.values():
+                    for result in self.client[self.db][collection].find({"#value.Ref": guid}, session=session):
+                        yield result
+        else:
+            yield {}
 
+    def update_item(self, guid, data):
+        data_to_update = next(self.find_by_guid(guid))
+        try:
+            with self.client.start_session() as session:
+                collection = COLLECTIONS_COMPARE.get(data_to_update["#type"].split('.')[0].split(':')[-1])
+                updated = self.client[self.db][collection].update_one({'#type':data_to_update['#type'], "#value.Ref": data_to_update['#value']['Ref']}, {'$set':{'#mywh':{'meta': data}}}, session=session)
+                db_logger.info(f'In {collection} in document ref {guid} was maded {updated.modified_count} modifications.')
+                db_logger.debug(f'Updating metadata: {data}')
+                return True
+        except Exception as e:
+            db_logger.info(f'Something goes wrong.')
+            db_logger.exception(f'{e}', exc_info=True)
+            return False
+
+    def delete_all_mywh(self, query=None):
+
+        with self.client.start_session() as session:
+                for collection in COLLECTIONS_COMPARE.values():
+                    try:
+                        updated = self.client[self.db][collection].update_many(query or {}, {'$unset': {'#mywh': {"$exists": True}}}, session=session)
+                        db_logger.info(f'In DB was maded {updated.modified_count} modifications. All mywh info deleted.')
+                        return True
+                    except Exception as e:
+                        db_logger.info(f'Something goes wrong.')
+                        db_logger.exception(f'{e}', exc_info=True)
+                        return False
 
 if __name__ == '__main__':
     inst = CrowdGamesDB()
     #inst.import_db()
-    a = list(inst.find_by_guid("5eaf1c44-52a9-11e8-80db-005056913f6d"))
-    print(1)
+    inst.delete_all_mywh({"$or": [{"#type": "jcfg:CatalogObject.Контрагенты"}, {"#type": "jcfg:CatalogObject.Организации"}, {"#type": "jcfg:CatalogObject.Кассы"}, {"#type": "jcfg:CatalogObject.БанковскиеСчетаОрганизаций"}, {"#type": "jcfg:CatalogObject.КлассификаторБанков"}, {"#type": "jcfg:CatalogObject.БанковскиеСчетаКонтрагентов"}]})
+
