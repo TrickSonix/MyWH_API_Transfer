@@ -1,6 +1,7 @@
 #import pandas as pd
 #import numpy as np
 #import os
+from ast import operator
 import re
 import datetime as dt
 from setup import COMPANY_TYPES, NDS_COMPARE
@@ -143,11 +144,15 @@ class JSONPermute:
     def _permute_supply(self):
         result = {}
         result['agent'] = {'meta': self.get_meta_by_guid(self.item['#value']['Контрагент'])}
-        result['agentAccount'] = {'meta': self.get_meta_by_guid(self.item['#value']['БанковскийСчетКонтрагента'])}
+        agent_account_meta = self.get_meta_by_guid(self.item['#value'].get('БанковскийСчетКонтрагента'))
+        if agent_account_meta:
+            result['agentAccount'] = {'meta': agent_account_meta}
         result['applicable'] = self.item['#value'].get('Posted') or False
         result['moment'] = self.date_convert(self.item['#value'].get('Date') or "")
         result['organization'] = {'meta': self.get_meta_by_guid(self.item['#value']['Организация'])}
-        result['organizationAccount'] = {'meta': self.get_meta_by_guid(self.item['#value']['БанковскийСчетОрганизации'])}
+        organization_account_meta = self.get_meta_by_guid(self.item['#value']['БанковскийСчетОрганизации'])
+        if organization_account_meta:
+            result['organizationAccount'] = {'meta': organization_account_meta}
         result['shared'] = True
         result['store'] = {'meta': self.get_meta_by_guid(self.item['#value']['Склад'])}
         result['positions'] = []
@@ -185,14 +190,20 @@ class JSONPermute:
     def _permute_purchasereturn(self):
         result = {}
         result['agent'] = {'meta': self.get_meta_by_guid(self.item['#value'].get('Контрагент'))}
-        result['agentAccount'] = {'meta': self.get_meta_by_guid(self.item['#value'].get('БанковскийСчетКонтрагента'))}
+        agent_account_meta = self.get_meta_by_guid(self.item['#value'].get('БанковскийСчетКонтрагента'))
+        if agent_account_meta:
+            result['agentAccount'] = {'meta': agent_account_meta}
         result['applicable'] = self.item['#value'].get('Posted') or False
         result['moment'] = self.date_convert(self.item['#value'].get('Date') or "")
         result['organization'] = {'meta': self.get_meta_by_guid(self.item['#value'].get('Организация'))}
-        result['organizationAccount'] = {'meta': self.get_meta_by_guid(self.item['#value'].get('БанковскийСчетОрганизации'))}
+        organization_account_meta = self.get_meta_by_guid(self.item['#value'].get('БанковскийСчетОрганизации'))
+        if organization_account_meta:
+            result['organizationAccount'] = {'meta': organization_account_meta}
         result['shared'] = True
         result['store'] = {'meta': self.get_meta_by_guid(self.item['#value'].get('Склад'))}
-        result['supply'] = {'meta': self.get_meta_by_guid(self.item['#value']['Товары'][0].get('ДокументПоступления'))} #вот эту хуйню проверь потом
+        supply = self.get_meta_by_guid(self.item['#value']['Товары'][0].get('ДокументПоступления'))
+        if supply:
+            result['supply'] = {'meta': supply} #вот эту хуйню проверь потом
         result['positions'] = []
         if self.item['#value'].get('Товары'):
             for pos in self.item['#value']['Товары']:
@@ -209,11 +220,15 @@ class JSONPermute:
     def _permute_customerorder(self):
         result = {}
         result['agent'] = {'meta': self.get_meta_by_guid(self.item['#value'].get('Контрагент'))}
-        result['agentAccount'] = {'meta': self.get_meta_by_guid(self.item['#value'].get('БанковскийСчетКонтрагента'))}
+        agent_account_meta = self.get_meta_by_guid(self.item['#value'].get('БанковскийСчетКонтрагента'))
+        if agent_account_meta:
+            result['agentAccount'] = {'meta': agent_account_meta}
         result['applicable'] = self.item['#value'].get('Posted') or False
         result['moment'] = self.date_convert(self.item['#value'].get('Date') or "")
         result['organization'] = {'meta': self.get_meta_by_guid(self.item['#value'].get('Организация'))}
-        result['organizationAccount'] = {'meta': self.get_meta_by_guid(self.item['#value'].get('БанковскийСчетОрганизации'))}
+        organization_account_meta = self.get_meta_by_guid(self.item['#value'].get('БанковскийСчетОрганизации'))
+        if organization_account_meta:
+            result['organizationAccount'] = {'meta': organization_account_meta}
         result['shared'] = True
         result['store'] = {'meta': self.get_meta_by_guid(self.item['#value'].get('Склад'))}
         result['positions'] = []
@@ -233,11 +248,15 @@ class JSONPermute:
     def _permute_demand(self):
         result = {}
         result['agent'] = {'meta': self.get_meta_by_guid(self.item['#value'].get('Контрагент'))}
-        result['agentAccount'] = {'meta': self.get_meta_by_guid(self.item['#value'].get('БанковскийСчетКонтрагента'))}
+        agent_account_meta = self.get_meta_by_guid(self.item['#value'].get('БанковскийСчетКонтрагента'))
+        if agent_account_meta:
+            result['agentAccount'] = {'meta': agent_account_meta}
         result['applicable'] = self.item['#value'].get('Posted') or False
         result['moment'] = self.date_convert(self.item['#value'].get('Date') or "")
         result['organization'] = {'meta': self.get_meta_by_guid(self.item['#value'].get('Организация'))}
-        result['organizationAccount'] = {'meta': self.get_meta_by_guid(self.item['#value'].get('БанковскийСчетОрганизации'))}
+        organization_account_meta = self.get_meta_by_guid(self.item['#value'].get('БанковскийСчетОрганизации'))
+        if organization_account_meta:
+            result['organizationAccount'] = {'meta': organization_account_meta}
         result['shared'] = True
         result['store'] = {'meta': self.get_meta_by_guid(self.item['#value'].get('Склад'))}
         result['positions'] = []
@@ -251,17 +270,23 @@ class JSONPermute:
                 temp['vatEnabled'] = (NDS_COMPARE.get(pos['СтавкаНДС']) or [0, False])[1]
                 result['positions'].append(temp)
                 del temp
-            result['demand'] = {'meta': self.get_meta_by_guid(self.item['#value']['Товары'][0].get('ЗаказКлиента'))} #вот это тоже поменять бы потом
+            demand = self.get_meta_by_guid(self.item['#value']['Товары'][0].get('ЗаказКлиента'))
+            if demand:
+                result['demand'] = {'meta': demand}
         return result
 
     def _permute_salesreturn(self):
         result = {}
         result['agent'] = {'meta': self.get_meta_by_guid(self.item['#value'].get('Контрагент'))}
-        result['agentAccount'] = {'meta': self.get_meta_by_guid(self.item['#value'].get('БанковскийСчетКонтрагента'))}
+        agent_account_meta = self.get_meta_by_guid(self.item['#value'].get('БанковскийСчетКонтрагента'))
+        if agent_account_meta:
+            result['agentAccount'] = {'meta': agent_account_meta}
         result['applicable'] = self.item['#value'].get('Posted') or False
         result['moment'] = self.date_convert(self.item['#value'].get('Date') or "")
         result['organization'] = {'meta': self.get_meta_by_guid(self.item['#value'].get('Организация'))}
-        result['organizationAccount'] = {'meta': self.get_meta_by_guid(self.item['#value'].get('БанковскийСчетОрганизации'))}
+        organization_account_meta = self.get_meta_by_guid(self.item['#value'].get('БанковскийСчетОрганизации'))
+        if organization_account_meta:
+            result['organizationAccount'] = {'meta': organization_account_meta}
         result['shared'] = True
         result['store'] = {'meta': self.get_meta_by_guid(self.item['#value'].get('Склад'))}
         result['positions'] = []
@@ -275,17 +300,23 @@ class JSONPermute:
                 temp['vatEnabled'] = (NDS_COMPARE.get(pos['СтавкаНДС']) or [0, False])[1]
                 result['positions'].append(temp)
                 del temp
-            result['demand'] = {'meta': self.get_meta_by_guid(self.item['#value']['Товары'][0].get('ДокументРеализации'))}
+            demand = self.get_meta_by_guid(self.item['#value']['Товары'][0].get('ДокументРеализации'))
+            if demand:
+                result['demand'] = {'meta': demand}
         return result
 
     def _permute_loss(self):
         result = {}
         result['agent'] = {'meta': self.get_meta_by_guid(self.item['#value'].get('Контрагент'))}
-        result['agentAccount'] = {'meta': self.get_meta_by_guid(self.item['#value'].get('БанковскийСчетКонтрагента'))}
+        agent_account_meta = self.get_meta_by_guid(self.item['#value'].get('БанковскийСчетКонтрагента'))
+        if agent_account_meta:
+            result['agentAccount'] = {'meta': agent_account_meta}
         result['applicable'] = self.item['#value'].get('Posted') or False
         result['moment'] = self.date_convert(self.item['#value'].get('Date') or "")
         result['organization'] = {'meta': self.get_meta_by_guid(self.item['#value'].get('Организация'))}
-        result['organizationAccount'] = {'meta': self.get_meta_by_guid(self.item['#value'].get('БанковскийСчетОрганизации'))}
+        organization_account_meta = self.get_meta_by_guid(self.item['#value'].get('БанковскийСчетОрганизации'))
+        if organization_account_meta:
+            result['organizationAccount'] = {'meta': organization_account_meta}
         result['shared'] = True
         result['store'] = {'meta': self.get_meta_by_guid(self.item['#value'].get('Склад'))}
         result['positions'] = []
@@ -302,39 +333,55 @@ class JSONPermute:
     def _permute_paymentin(self):
         result = {}
         result['agent'] = {'meta': self.get_meta_by_guid(self.item['#value'].get('Контрагент'))}
-        result['agentAccount'] = {'meta': self.get_meta_by_guid(self.item['#value'].get('БанковскийСчетКонтрагента'))}
+        agent_account_meta = self.get_meta_by_guid(self.item['#value'].get('БанковскийСчетКонтрагента'))
+        if agent_account_meta:
+            result['agentAccount'] = {'meta': agent_account_meta}
         result['applicable'] = self.item['#value'].get('Posted') or False
         result['moment'] = self.date_convert(self.item['#value'].get('Date') or "")
         result['organization'] = {'meta': self.get_meta_by_guid(self.item['#value'].get('Организация'))}
-        result['organizationAccount'] = {'meta': self.get_meta_by_guid(self.item['#value'].get('БанковскийСчетОрганизации'))}
+        organization_account_meta = self.get_meta_by_guid(self.item['#value'].get('БанковскийСчетОрганизации'))
+        if organization_account_meta:
+            result['organizationAccount'] = {'meta': organization_account_meta}
         result['shared'] = True
         result['sum'] = self.item['#value'].get('СуммаДокумента') or 0
         result['operations'] = []
         if self.item['#value'].get('РасшифровкаПлатежа'):
             for pos in self.item['#value']['РасшифровкаПлатежа'] or []:
                 temp = {}
-                temp['meta'] = self.get_meta_by_guid(pos.get('ОснованиеПлатежа'))
-                result['operations'].append(temp)
+                payment_base = self.get_meta_by_guid(pos.get('ОснованиеПлатежа'))
+                if payment_base:
+                    temp['meta'] = payment_base
+                    result['operations'].append(temp)
                 del temp
+        if not result['operations']:
+            result.pop('operations')
         return result
 
     def _permute_paymentout(self):
         result = {}
         result['agent'] = {'meta': self.get_meta_by_guid(self.item['#value'].get('Контрагент'))}
-        result['agentAccount'] = {'meta': self.get_meta_by_guid(self.item['#value'].get('БанковскийСчетКонтрагента'))}
+        agent_account_meta = self.get_meta_by_guid(self.item['#value'].get('БанковскийСчетКонтрагента'))
+        if agent_account_meta:
+            result['agentAccount'] = {'meta': agent_account_meta}
         result['applicable'] = self.item['#value'].get('Posted') or False
         result['moment'] = self.date_convert(self.item['#value'].get('Date') or "")
         result['organization'] = {'meta': self.get_meta_by_guid(self.item['#value'].get('Организация'))}
-        result['organizationAccount'] = {'meta': self.get_meta_by_guid(self.item['#value'].get('БанковскийСчетОрганизации'))}
+        organization_account_meta = self.get_meta_by_guid(self.item['#value'].get('БанковскийСчетОрганизации'))
+        if organization_account_meta:
+            result['organizationAccount'] = {'meta': organization_account_meta}
         result['shared'] = True
         result['sum'] = self.item['#value'].get('СуммаДокумента') or 0
         result['operations'] = []
         if self.item['#value'].get('РасшифровкаПлатежа'):
             for pos in self.item['#value']['РасшифровкаПлатежа'] or []:
                 temp = {}
-                temp['meta'] = self.get_meta_by_guid(pos.get('ОснованиеПлатежа'))
-                result['operations'].append(temp)
+                payment_base = self.get_meta_by_guid(pos.get('ОснованиеПлатежа'))
+                if payment_base:
+                    temp['meta'] = payment_base
+                    result['operations'].append(temp)
                 del temp
+        if not result['operations']:
+            result.pop('operations')
         return result
 
     def permute(self) -> dict:

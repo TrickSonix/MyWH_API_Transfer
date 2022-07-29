@@ -1,4 +1,3 @@
-from unittest import result
 import pymongo as pm
 import os
 import json
@@ -13,7 +12,7 @@ from setup import COLLECTIONS_COMPARE
 
 db_logger = setup_logger('db_logger', 'logs/MongoDB_log.log', level=DEBUG)
 
-client = MongoClient('localhost', 27017)
+
 
 
 def get_readed_files(log_file='logs/MongoDB_log.log'):
@@ -95,28 +94,27 @@ class CrowdGamesDB:
                 collection = COLLECTIONS_COMPARE.get(data_to_update["#type"].split('.')[0].split(':')[-1])
                 updated = self.client[self.db][collection].update_one({'#type':data_to_update['#type'], "#value.Ref": data_to_update['#value']['Ref']}, {'$set':{'#mywh':{'meta': data}}}, session=session)
                 db_logger.info(f'In {collection} in document ref {guid} was maded {updated.modified_count} modifications.')
-                db_logger.debug(f'Updating metadata: {data}')
+                db_logger.debug(f'Updating metadata: \n{json.dumps(data, indent=4, ensure_ascii=False).encode("utf-8").decode("utf-8")}')
                 return True
         except Exception as e:
             db_logger.info(f'Something goes wrong.')
             db_logger.exception(f'{e}', exc_info=True)
+            db_logger.debug(f'Passed data: \n{json.dumps(data, indent=4, ensure_ascii=False).encode("utf-8").decode("utf-8")}')
             return False
 
     def delete_all_mywh(self, query=None):
-
+        db_logger.info(f'Trying to delete mywh data from {query}')
         with self.client.start_session() as session:
-                for collection in COLLECTIONS_COMPARE.values():
-                    try:
-                        updated = self.client[self.db][collection].update_many(query or {}, {'$unset': {'#mywh': {"$exists": True}}}, session=session)
-                        db_logger.info(f'In DB was maded {updated.modified_count} modifications. All mywh info deleted.')
-                        return True
-                    except Exception as e:
-                        db_logger.info(f'Something goes wrong.')
-                        db_logger.exception(f'{e}', exc_info=True)
-                        return False
+            for collection in COLLECTIONS_COMPARE.values():
+                try:
+                    updated = self.client[self.db][collection].update_many(query or {}, {'$unset': {'#mywh': {"$exists": True}}}, session=session)
+                    db_logger.info(f'In {collection} was maded {updated.modified_count} modifications.')
+                except Exception as e:
+                    db_logger.info(f'Something goes wrong.')
+                    db_logger.exception(f'{e}', exc_info=True)
 
 if __name__ == '__main__':
     inst = CrowdGamesDB()
     #inst.import_db()
-    inst.delete_all_mywh({"$or": [{"#type": "jcfg:CatalogObject.Контрагенты"}, {"#type": "jcfg:CatalogObject.Организации"}, {"#type": "jcfg:CatalogObject.Кассы"}, {"#type": "jcfg:CatalogObject.БанковскиеСчетаОрганизаций"}, {"#type": "jcfg:CatalogObject.КлассификаторБанков"}, {"#type": "jcfg:CatalogObject.БанковскиеСчетаКонтрагентов"}]})
+    inst.delete_all_mywh({"#type": "jcfg:DocumentObject.РеализацияТоваровУслуг"}) #{"#type": "jcfg:CatalogObject.Контрагенты"}, {"#type": "jcfg:CatalogObject.Организации"}, {"#type": "jcfg:CatalogObject.Кассы"}, {"#type": "jcfg:CatalogObject.БанковскиеСчетаОрганизаций"}, {"#type": "jcfg:CatalogObject.КлассификаторБанков"}, {"#type": "jcfg:CatalogObject.БанковскиеСчетаКонтрагентов"}
 
