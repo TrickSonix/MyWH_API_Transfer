@@ -20,6 +20,5 @@
         }
     ],
     "shared": true,
-    "store": "#value/Склад->#mywh/meta",
-    "customerOrder": "#value/Товары:ЗаказКлиента/#value->#mywh/meta"
+    "store": "#value/Склад->#mywh/meta"
 }

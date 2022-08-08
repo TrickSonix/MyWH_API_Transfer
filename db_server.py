@@ -29,12 +29,18 @@ class CrowdGamesDB:
         self.client = MongoClient('localhost', 27017)
         self.db = db
 
-    def import_db(self, db_path = 'D:\Никита\Работа\CrowdGames\JSON_DB', stop_by_error=False):
+    def import_db(self, db_path = 'D:\Никита\Работа\CrowdGames\JSON_DB', stop_by_error=False, skip_exists_ref=False, skip_by_logs=False, skip_directorys=False, read_directorys=False):
+
+        assert not (skip_directorys and read_directorys)
+
         db_logger.info(f'Starting import DB.')
         db_logger.info(f'Current path of copied DB: {db_path}')
         error_count = 0
-        readed_files = list(get_readed_files())
-        for directory in os.listdir(db_path):
+        if skip_by_logs:
+            readed_files = list(get_readed_files())
+        else:
+            readed_files = []
+        for directory in [x for x in os.listdir(db_path) if (x in (read_directorys or os.listdir(db_path)) and x not in (skip_directorys or []))]:
             if '.' not in directory:
                 
                 db_logger.info(f'Current working directory: {directory}')
@@ -47,9 +53,15 @@ class CrowdGamesDB:
                             try:
                                 with open(f'{os.path.join(db_path, directory, subdirectory, file)}', 'r', encoding='ansi') as f:
                                     data = json.load(f)
-                                    data_to_insert[subdirectory].append(InsertOne(data))
                                     db_logger.info(f'{os.path.join(db_path, directory, subdirectory, file)} was readed')
-                            except (OSError, JSONDecodeError) as e:
+                                    if skip_exists_ref:
+                                        if next(self.find_by_guid(data["#value"].get('Ref'))):
+                                            continue
+                                        else:
+                                            data_to_insert[subdirectory].append(InsertOne(data))
+                                    else:
+                                        data_to_insert[subdirectory].append(InsertOne(data))
+                            except (OSError, JSONDecodeError, KeyError) as e:
                                 db_logger.exception(f'{e}', exc_info=True)
                                 if stop_by_error:
                                     break
@@ -75,15 +87,23 @@ class CrowdGamesDB:
 
     def get_items(self, collection, query):
         with self.client.start_session() as session:
+            count = 0
             for result in self.client[self.db][COLLECTIONS_COMPARE.get(collection) or collection].find(query, session=session):
+                count += 1
                 yield result
+            if count == 0:
+                yield {}
 
     def find_by_guid(self, guid):
+        count = 0
         if is_guid(guid):
             with self.client.start_session() as session:
                 for collection in COLLECTIONS_COMPARE.values():
                     for result in self.client[self.db][collection].find({"#value.Ref": guid}, session=session):
+                        count += 1
                         yield result
+                if count == 0:
+                    yield {}
         else:
             yield {}
 
@@ -115,6 +135,7 @@ class CrowdGamesDB:
 
 if __name__ == '__main__':
     inst = CrowdGamesDB()
-    #inst.import_db()
-    inst.delete_all_mywh({"#type": "jcfg:DocumentObject.РеализацияТоваровУслуг"}) #{"#type": "jcfg:CatalogObject.Контрагенты"}, {"#type": "jcfg:CatalogObject.Организации"}, {"#type": "jcfg:CatalogObject.Кассы"}, {"#type": "jcfg:CatalogObject.БанковскиеСчетаОрганизаций"}, {"#type": "jcfg:CatalogObject.КлассификаторБанков"}, {"#type": "jcfg:CatalogObject.БанковскиеСчетаКонтрагентов"}
+   # inst.import_db(skip_exists_ref=True, read_directorys=['Документы'])
+    inst.delete_all_mywh({"#type": {"$in":["jcfg:DocumentObject.РеализацияТоваровУслуг", "jcfg:DocumentObject.ПоступлениеБезналичныхДенежныхСредств", "jcfg:DocumentObject.СписаниеНедостачТоваров", "jcfg:DocumentObject.СписаниеБезналичныхДенежныхСредств"]}}) #{"#type": "jcfg:CatalogObject.Контрагенты"}, {"#type": "jcfg:CatalogObject.Организации"}, {"#type": "jcfg:CatalogObject.Кассы"}, {"#type": "jcfg:CatalogObject.БанковскиеСчетаОрганизаций"}, {"#type": "jcfg:CatalogObject.КлассификаторБанков"}, {"#type": "jcfg:CatalogObject.БанковскиеСчетаКонтрагентов"}
+    print(1)
 
