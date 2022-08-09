@@ -1,4 +1,5 @@
 import collections
+import pip
 import pymongo as pm
 import os
 import json
@@ -31,7 +32,7 @@ class CrowdGamesDB:
         self.db = db
 
     def import_db(self, db_path = 'D:\Никита\Работа\CrowdGames\JSON_DB', stop_by_error=False, skip_exists_ref=False, skip_by_logs=False, skip_directorys=False, read_directorys=False):
-
+        #Когда будешь импортировать актуал - СОЗДАВАЙ СРАЗУ ИНДЕКС НА Ref, чтобы избежать дублирования документов.
         assert not (skip_directorys and read_directorys)
 
         db_logger.info(f'Starting import DB.')
@@ -88,10 +89,10 @@ class CrowdGamesDB:
 
     def get_items(self, collection, query):
         with self.client.start_session() as session:
-            if self.client[self.db][COLLECTIONS_COMPARE.get(collection)].count_documents(filter=query, session=session) == 0:
+            if self.client[self.db][COLLECTIONS_COMPARE.get(collection, collection)].count_documents(filter=query, session=session) == 0:
                 yield {}
             else:
-                cursor = self.client[self.db][COLLECTIONS_COMPARE.get(collection)].find(query, session=session, no_cursor_timeout=True)
+                cursor = self.client[self.db][COLLECTIONS_COMPARE.get(collection, collection)].find(query, session=session, no_cursor_timeout=True)
                 for result in cursor:
                     yield result
 
@@ -124,6 +125,19 @@ class CrowdGamesDB:
             db_logger.debug(f'Passed data: \n{json.dumps(data, indent=4, ensure_ascii=False)}')
             return False
 
+    def delete_one_item(self, collection, query):
+        collection = COLLECTIONS_COMPARE.get(collection) or collection
+        with self.client.start_session() as session:
+            try:
+                result = self.client[self.db][collection].delete_one(query, session=session)
+                if result.deleted_count == 1:
+                    db_logger.info(f'Item with {query} was deleted')
+                else:
+                    db_logger.info(f'Nothing deleted with {query}')
+            except Exception as e:
+                db_logger.info(f'Something goes wrong with {query} delete from {collection}.')
+                db_logger.exception(f'{e}', exc_info=True)
+
     def delete_all_mywh(self, collection=None, query=None):
         db_logger.info(f'Trying to delete mywh data from {query}')
         with self.client.start_session() as session:
@@ -137,10 +151,53 @@ class CrowdGamesDB:
                     db_logger.info(f'Something goes wrong.')
                     db_logger.exception(f'{e}', exc_info=True)
 
+    def drop_duplicates_by_ref(self, collection, pipeline):
+        collection = COLLECTIONS_COMPARE.get(collection, collection)
+        with self.client.start_session() as session:
+            db_coll = self.client[self.db][collection]
+            refs_to_delete = list(db_coll.aggregate(pipeline=pipeline, session=session))
+            for ref in refs_to_delete:
+                try:
+                    result = db_coll.delete_one({"#value.Ref": ref["#value"].get("Ref")})
+                    if result.deleted_count == 1:
+                        db_logger.info(f'Item with {ref["#value"].get("Ref")} was deleted')
+                    else:
+                        db_logger.info(f'Nothing deleted with {ref["#value"].get("Ref")}')
+                except Exception as e:
+                    db_logger.info(f'Something goes wrong with {ref["#value"].get("Ref")} delete from {collection}.')
+                    db_logger.exception(f'{e}', exc_info=True)
+
 if __name__ == '__main__':
-    
+    duplicates_pipeline = [
+    {
+        '$group': {
+            '_id': '$#value.Ref', 
+            'count': {
+                '$sum': 1
+            }
+        }
+    }, {
+        '$match': {
+            '_id': {
+                '$ne': None
+            }
+        }
+    }, {
+        '$match': {
+            'count': {
+                '$gt': 1
+            }
+        }
+    }, {
+        '$project': {
+            '#value.Ref': '$_id', 
+            '_id': 0
+        }
+    }
+]
     inst = CrowdGamesDB()
    # inst.import_db(skip_exists_ref=True, read_directorys=['Документы'])
-    inst.delete_all_mywh(collection=['Документы']) #{"#type": {"$in":["jcfg:DocumentObject.РеализацияТоваровУслуг", "jcfg:DocumentObject.ПоступлениеБезналичныхДенежныхСредств", "jcfg:DocumentObject.СписаниеНедостачТоваров", "jcfg:DocumentObject.СписаниеБезналичныхДенежныхСредств", "jcfg:DocumentObject.СписаниеБезналичныхДенежныхСредств"]}})
+    inst.delete_all_mywh(collection=['ПланыВидовХарактеристик']) #{"#type": {"$in":["jcfg:DocumentObject.РеализацияТоваровУслуг", "jcfg:DocumentObject.ПоступлениеБезналичныхДенежныхСредств", "jcfg:DocumentObject.СписаниеНедостачТоваров", "jcfg:DocumentObject.СписаниеБезналичныхДенежныхСредств", "jcfg:DocumentObject.СписаниеБезналичныхДенежныхСредств"]}})
+    inst.drop_duplicates_by_ref('ПланыВидовХарактеристик', duplicates_pipeline)
     print('Success')
 
