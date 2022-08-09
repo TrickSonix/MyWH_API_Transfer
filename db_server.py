@@ -1,3 +1,4 @@
+import collections
 import pymongo as pm
 import os
 import json
@@ -5,12 +6,12 @@ import json
 from pymongo import MongoClient, InsertOne
 from requests import JSONDecodeError
 from logger import setup_logger
-from logging import DEBUG
+from logging import DEBUG, INFO
 from utils import is_guid
 from setup import COLLECTIONS_COMPARE
 
 
-db_logger = setup_logger('db_logger', 'logs/MongoDB_log.log', level=DEBUG)
+db_logger = setup_logger('db_logger', 'logs/MongoDB_log.log', level=INFO)
 
 
 
@@ -87,21 +88,22 @@ class CrowdGamesDB:
 
     def get_items(self, collection, query):
         with self.client.start_session() as session:
-            count = 0
-            for result in self.client[self.db][COLLECTIONS_COMPARE.get(collection) or collection].find(query, session=session):
-                count += 1
-                yield result
-            if count == 0:
+            if self.client[self.db][COLLECTIONS_COMPARE.get(collection)].count_documents(filter=query, session=session) == 0:
                 yield {}
+            else:
+                cursor = self.client[self.db][COLLECTIONS_COMPARE.get(collection)].find(query, session=session, no_cursor_timeout=True)
+                for result in cursor:
+                    yield result
 
     def find_by_guid(self, guid):
-        count = 0
         if is_guid(guid):
+            count = 0
             with self.client.start_session() as session:
                 for collection in COLLECTIONS_COMPARE.values():
-                    for result in self.client[self.db][collection].find({"#value.Ref": guid}, session=session):
-                        count += 1
-                        yield result
+                    count += self.client[self.db][collection].count_documents(filter={"#value.Ref": guid}, session=session)
+                    if count > 0:
+                        cursor = self.client[self.db][collection].find_one({"#value.Ref": guid}, session=session)
+                        yield cursor
                 if count == 0:
                     yield {}
         else:
@@ -114,28 +116,31 @@ class CrowdGamesDB:
                 collection = COLLECTIONS_COMPARE.get(data_to_update["#type"].split('.')[0].split(':')[-1])
                 updated = self.client[self.db][collection].update_one({'#type':data_to_update['#type'], "#value.Ref": data_to_update['#value']['Ref']}, {'$set':{'#mywh':{'meta': data}}}, session=session)
                 db_logger.info(f'In {collection} in document ref {guid} was maded {updated.modified_count} modifications.')
-                db_logger.debug(f'Updating metadata: \n{json.dumps(data, indent=4, ensure_ascii=False).encode("utf-8").decode("utf-8")}')
+                db_logger.debug(f'Updating metadata: \n{json.dumps(data, indent=4, ensure_ascii=False)}')
                 return True
         except Exception as e:
             db_logger.info(f'Something goes wrong.')
             db_logger.exception(f'{e}', exc_info=True)
-            db_logger.debug(f'Passed data: \n{json.dumps(data, indent=4, ensure_ascii=False).encode("utf-8").decode("utf-8")}')
+            db_logger.debug(f'Passed data: \n{json.dumps(data, indent=4, ensure_ascii=False)}')
             return False
 
-    def delete_all_mywh(self, query=None):
+    def delete_all_mywh(self, collection=None, query=None):
         db_logger.info(f'Trying to delete mywh data from {query}')
         with self.client.start_session() as session:
-            for collection in COLLECTIONS_COMPARE.values():
+            if not collection:
+                collection = COLLECTIONS_COMPARE.values()
+            for cols in collection:
                 try:
-                    updated = self.client[self.db][collection].update_many(query or {}, {'$unset': {'#mywh': {"$exists": True}}}, session=session)
-                    db_logger.info(f'In {collection} was maded {updated.modified_count} modifications.')
+                    updated = self.client[self.db][cols].update_many(query or {}, {'$unset': {'#mywh': {"$exists": True}}}, session=session)
+                    db_logger.info(f'In {cols} was maded {updated.modified_count} modifications.')
                 except Exception as e:
                     db_logger.info(f'Something goes wrong.')
                     db_logger.exception(f'{e}', exc_info=True)
 
 if __name__ == '__main__':
+    
     inst = CrowdGamesDB()
    # inst.import_db(skip_exists_ref=True, read_directorys=['Документы'])
-    inst.delete_all_mywh({"#type": {"$in":["jcfg:DocumentObject.РеализацияТоваровУслуг", "jcfg:DocumentObject.ПоступлениеБезналичныхДенежныхСредств", "jcfg:DocumentObject.СписаниеНедостачТоваров", "jcfg:DocumentObject.СписаниеБезналичныхДенежныхСредств"]}}) #{"#type": "jcfg:CatalogObject.Контрагенты"}, {"#type": "jcfg:CatalogObject.Организации"}, {"#type": "jcfg:CatalogObject.Кассы"}, {"#type": "jcfg:CatalogObject.БанковскиеСчетаОрганизаций"}, {"#type": "jcfg:CatalogObject.КлассификаторБанков"}, {"#type": "jcfg:CatalogObject.БанковскиеСчетаКонтрагентов"}
-    print(1)
+    inst.delete_all_mywh(collection=['Документы']) #{"#type": {"$in":["jcfg:DocumentObject.РеализацияТоваровУслуг", "jcfg:DocumentObject.ПоступлениеБезналичныхДенежныхСредств", "jcfg:DocumentObject.СписаниеНедостачТоваров", "jcfg:DocumentObject.СписаниеБезналичныхДенежныхСредств", "jcfg:DocumentObject.СписаниеБезналичныхДенежныхСредств"]}})
+    print('Success')
 

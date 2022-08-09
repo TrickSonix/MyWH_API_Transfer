@@ -10,7 +10,7 @@ import json
 import functools
 import operator
 from logger import setup_logger
-from logging import DEBUG
+from logging import DEBUG, INFO
 from ratelimit import limits
 from ratelimit.exception import RateLimitException
 from db_server import CrowdGamesDB
@@ -25,9 +25,7 @@ from utils import JSONPermute
     
     demand.json надо пофиксить, а скорее всего вообще все переделать."""
 
-basic_logger = setup_logger('basic_logger', 'logs/my_wh_api.log', DEBUG)
-json_logger = setup_logger('json_logger', f"logs/{dt.datetime.now().strftime('%Y-%m-%d')}_json.log", DEBUG)
-request_logger = setup_logger('request_logger', f"logs/{dt.datetime.now().strftime('%Y-%m-%d')}_request.log", DEBUG)
+
 
 
 def sleep_and_retry(func):
@@ -98,23 +96,26 @@ class MyWHAPI:
 
     @staticmethod
     def json_load(json_data):
-        if isinstance(json_data, dict) or isinstance(json_data, list):
-            return json_data
-        if os.path.exists(json_data):
-            with open(json_data, 'r', encoding='utf-8') as f:
+        if json_data:
+            if isinstance(json_data, dict) or isinstance(json_data, list):
+                return json_data
+            if os.path.exists(json_data):
+                with open(json_data, 'r', encoding='utf-8') as f:
+                    try:
+                        return json.load(f)
+                    except json.decoder.JSONDecodeError as e:
+                        json_logger.error(e)
+                        json_logger.debug(f'JSON_data: \n{json_data}')
+                        return {}
+            else:
                 try:
-                    return json.load(f)
+                    return json.loads(json_data)
                 except json.decoder.JSONDecodeError as e:
                     json_logger.error(e)
                     json_logger.debug(f'JSON_data: \n{json_data}')
                     return {}
         else:
-            try:
-                return json.loads(json_data)
-            except json.decoder.JSONDecodeError as e:
-                json_logger.error(e)
-                json_logger.debug(f'JSON_data: \n{json_data}')
-                return {}
+            return {}
 
     @staticmethod
     def dump_json(data, file_path=None, **kwargs) -> str:
@@ -157,29 +158,6 @@ class MyWHAPI:
             request_logger.exception(f'{e}', exc_info=True)
             request_logger.debug(f'Not transfered request body: \n{self.dump_json(self.json_load(kwargs.get("data")), indent=4)}')
             return requests.Response()
-
-    # def get_products(self, params={},  **kwargs):
-    #     """аргумент params передается в виде словаря, в котором все значения должны быть списками"""
-    #     db = self.json_load(PRODUCTS_DB) 
-    #     result = []
-    #     missed = {}
-    #     if not db:
-    #         response = self.request(method='GET', path=REQUEST_LINKS['PRODUCT'], params={'filter': self.to_query(params)})
-    #         db = self.json_load(response.json()).get('rows')
-    #     for key, value in params.items():
-    
-    #         items = list(filter(lambda x: x.get(key) in value, db))
-    #         result.extend(items)
-    #         missed[key] = [x for x in value if x not in [x.get(key) for x in items]]
-        
-    #     if self.list_flatten(missed.values()):
-    #         new_response = self.request(method='GET', path=REQUEST_LINKS['PRODUCT'], params={'filter': self.to_query(missed)})
-    #         new = self.json_load(new_response.json()).get('rows')
-    #         db.extend(new)
-    #         result.extend(new)
-    #     with open(PRODUCTS_DB, 'w') as f:
-    #         json.dump(db, f, indent=4)
-    #     return result
   
     def create_json_data_body(self, body_schema, schema_name, **kwargs):
         try:
@@ -196,12 +174,14 @@ class MyWHAPI:
             new_query = kwargs.get('query')
             basic_logger.exception(f'{e}', exc_info=True)
             basic_logger.debug(f'Body schema: {body_schema}. Query: {new_query}')
-            return []
+            items = []
         res = []
         for item in items:
             perm = JSONPermute(item, schema_name.lower(), self.db)
-            permuted_data = perm.permute()
-            item_ref = item['#value']['Ref']
+            permuted_data = perm.permute(update_meta=kwargs.get('update_meta', False))
+            if not permuted_data:
+                continue
+            item_ref = item.get('#value', {}).get('Ref')
             if self._check_data_size(res, (item_ref, permuted_data), self.max_data_size) or len(res)+1 > self.max_item_count:
                 yield res
                 res = []
@@ -227,9 +207,10 @@ class MyWHAPI:
                     basic_logger.info(f'Success in update {ref} item')
                 else:
                     basic_logger.info(f'Fail in update to DB {ref} item')
+                    db_logger.error(f'Next pair ref and meta not written: \n !{self.dump_json((ref, meta), indent=4)}!')
                     error_count +=1
             else:
-                basic_logger.info(f'Fail in update to DB {ref} item')
+                basic_logger.info(f'Fail in update to DB {ref} item. Meta missed.')
                 error_count +=1
             if resp.get('accounts'):
                 for acc in resp['accounts'].get('rows'):
@@ -240,29 +221,41 @@ class MyWHAPI:
                         basic_logger.info(f'Success in update {acc_ref} item')
                     else:
                         basic_logger.info(f'Fail in update to DB {acc_ref} item')
+                        db_logger.error(f'Next pair ref and meta not written: \n !{self.dump_json((acc_ref, acc_meta), indent=4)}!')
                         error_count +=1
         return error_count
     
     def restore_meta(self, path, data: list[dict]):
+        if not path:
+            return [({}, {})]
         start_time = dt.datetime.now()
         href = path
-        while True:
-            all_entitys = self.request('GET', path=href)
-            response_data = all_entitys.json()['rows']
-            refs_list = [x.get('description', "missed").split(' ')[-1] for x in data]
-            missed_meta = []
-            for entity in response_data:
-                cur_ref = entity.get('description', "00000000-0000-0000-0000-000000000000").split(' ')[-1]
-                if cur_ref in refs_list:
-                    missed_meta.append((cur_ref, entity['meta']))
-                    basic_logger.info(f'Restored meta for {cur_ref}')
-            if response_data.get('nextHref'):
-                href = '/'.join(['', *response_data['meta'].get('nextHref').split('/')[6:]])
-            else:
-                return missed_meta
-            if dt.datetime.now() - start_time > dt.timedelta(minutes=60):
+        refs_list = [x[1].get('description', "missed").split(' ')[-1] for x in data]
+        missed_meta = []
+        error_count = 0
+        while refs_list:
+            for n, ref in enumerate(refs_list):
+                entity = self.request('GET', path=href, params={'search': ref})
+                if entity.status_code == 200:
+                    entity_json = entity.json()
+                    if entity_json['meta']['size'] == 1:
+                        missed_meta.append((refs_list.pop(n), {'meta': entity_json['rows'][0]['meta']}))
+                        basic_logger.info(f'Succesufully finded meta for {ref}')
+                    elif entity_json['meta']['size'] == 0:
+                        basic_logger.info(f'Did not finded any item with {refs_list.pop(n)}')
+                    else:
+                        basic_logger.warning(f'For {refs_list.pop(n)} search matched more then 1 entity')
+                else:
+                    basic_logger.warning(f'In restore meta server got {entity.status_code}')
+                    error_count += 1
+                    if error_count >= 45:
+                        break
+        
+            if dt.datetime.now() - start_time > dt.timedelta(minutes=90):
                 basic_logger.warning(f'Failed to restore meta.')
                 return [({}, {})]
+
+        return missed_meta
 
     
     def migrate(self, schema, path, **kwargs):
@@ -283,12 +276,14 @@ class MyWHAPI:
                 params = {'expand': 'accounts'}
             else:
                 params = {}
-
+            if not data_part:
+                continue
             response = self.request(method='POST', path=path, data=self.dump_json([x[1] for x in data_part]), params=params)
 
             if response.status_code != 200 or response.status_code is None:
                 basic_logger.warning(f'Something goes wrong with {schema} migration. Get {response.status_code} from server.')
                 if response.status_code == 504 or response.status_code is None:
+                    self.dump_json(file_path=f'Data/Missed_meta_{dt.datetime.now().strftime("%Y-%m-%d")}.json', indent=4)
                     basic_logger.info(f'Trying to restore meta.')
                     zipped_meta = self.restore_meta(path, data_part)
                     error_count += 1
@@ -327,7 +322,7 @@ class MyWHAPI:
                 basic_logger.info(f'{entity} entity succesefully migrated.')
             else:
                 basic_logger.info(f'{entity} was migrated with {errors} errors.')
-            input('Press any key to continue')
+            input(f'{entity} migrated. Press any key to continue')
 
     def ctrl_z(self, path, mode='delete', **kwargs):
         """Вот эту вот функцию надо будет переписать как-то покрасивее.
@@ -345,6 +340,7 @@ class MyWHAPI:
         else:
             params = {'filter': query}
         href = path
+        errors = 0
         while True:
             data_to_delete = self.request('GET', href, params=params)
             if data_to_delete.status_code == 200:
@@ -353,33 +349,57 @@ class MyWHAPI:
                 except requests.JSONDecodeError as e:
                     basic_logger.exception(f'{e}', exc_info=True)
                     return False
-                errors = 0
+                
                 metas = [{'meta': x['meta']} for x in response_json.get('rows', [])]
                 if metas:
                     response = self.request('POST', '/'.join([path, mode]), data=self.dump_json(metas))
-                    if response.status_code != 200:
-                        basic_logger.info(f'In ctrl_z server give {response.status_code}')
-                        errors += 1
-                    else:
+                    if response.status_code == 200:
                         if response_json['meta'].get('nextHref'):
                             continue
                         else:
                             basic_logger.info("\n".join([x.get("info", 'No info') for x in response.json()]))
                             basic_logger.info(f'Удаление завершено с  {errors} ошибками.')
                             return True
+                        
+                    elif data_to_delete.status_code == 409:
+                        basic_logger.warning('Some object are in use and cannot be deleted.')
+                        return False
+                    else:
+                        basic_logger.info(f'In ctrl_z server give {response.status_code}')
+                        errors += 1
+                        if errors >= 45:
+                            return False
+            
                 else:
                     basic_logger.warning(f'Ctrl+z dont find any data in MyWH to delete.')
                     basic_logger.debug(f'Request params: {params}')
                     return False
 
+    def restore_zipped_meta(self, schema, **kwargs):
+        #Полагаю что время выполнения этого на 9к+ реализациях будет оооооооочень долгим....
+        body_schema = self.json_load(f'schemas/{schema.lower()}.json')
+        item_type = body_schema["#type"].split('.')[0].split(':')[-1]
+        refs_list = [(None, {'description': x['#value']['Ref']}) for x in self.db.get_items(item_type, {"#type": body_schema["#type"], "#mywh": {"$exists": False}})]
+        zipped_meta = self.restore_meta(kwargs.get('path'), refs_list)
+        errors = self.update_db_metas(zipped_meta)
+        basic_logger.info(f'Attemp to resore meta in DB end with {errors} errors.')
+        
 
 if __name__ =='__main__':
-
+    basic_logger = setup_logger('basic_logger', 'logs/my_wh_api.log', DEBUG)
+    json_logger = setup_logger('json_logger', f"logs/{dt.datetime.now().strftime('%Y-%m-%d')}_json.log", DEBUG)
+    request_logger = setup_logger('request_logger', f"logs/{dt.datetime.now().strftime('%Y-%m-%d')}_request.log", DEBUG)
+    db_logger = setup_logger('db_logger', 'logs/MongoDB_log.log', level=INFO)
     basic_logger.info('Start logging session.')
     database = CrowdGamesDB()
     mywh = MyWHAPI(USERNAME, PSWD, database)
     #response = mywh.get_products(params={'pathName':['Товары интернет-магазинов/Настольные игры/CrowdGames']})
     #mywh.json_to_excel(json.dumps(response), columns=['id', 'name', 'article'])
-    mywh.db_migrate(only_posted_documents=True)
-    #mywh.ctrl_z('/entity/demand', params={"limit": '500'})
+    a = input('Migrate - press M, go back - B, Restore zipped_meta - R.\n')
+    if a =='m':
+        mywh.db_migrate(only_posted_documents=True, skip_existing=True)
+    if a =='b':
+        mywh.ctrl_z('/entity/enter', params={"limit": '500'})
+    if a =='r':
+        mywh.restore_zipped_meta(schema='CUSTOMERORDER', path='/entity/customerorder')
     basic_logger.info('Finish')
