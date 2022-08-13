@@ -4,7 +4,7 @@
 from ast import operator
 import re
 import datetime as dt
-from setup import COMPANY_TYPES, NDS_COMPARE
+from setup import COMPANY_TYPES, NDS_COMPARE, DEFAULT_GROUP, DEFAULT_TAG, DEFAULT_UOM, DEFAULT_CURRENCY, DEFAULT_RETAIL_CUSTOMER, DEFAULT_ORGANIZATION_ACCOUNTS, DEFAULT_ORGANIZATION_RETAIL_ACC, DEFAULT_STATE
 
 
 def damerau_levenshtein_distance(s1, s2):
@@ -89,15 +89,17 @@ class JSONPermute:
         result['inn'] = self.item['#value'].get('ИНН') or ""
         result['okpo'] = self.item['#value'].get('КодПоОКПО') or ""
         result['ogrnip'] = self.item['#value'].get('ОГРН') or ""
+        result['group'] = DEFAULT_GROUP
         result['accounts'] = []
         accounts = self.db.get_items('Справочники', {"#type": "jcfg:CatalogObject.БанковскиеСчетаОрганизаций", "#value.Owner.#value": self.item['#value']['Ref']})
         for acc in accounts:
             temp = {}
             if acc.get('#mywh'):
                 if acc['#mywh'].get('meta'):
-                    temp['meta'] = acc['#mywh'].get('meta')
+                    temp['meta'] = acc['#mywh']['meta']
             temp['accountNumber'] = acc['#value']['НомерСчета']
-            temp['bankLocation'] = acc['#value']['Ref']
+            if not acc.get('#mywh'):
+                temp['bankLocation'] = acc['#value']['Ref']
             bankName = (next(self.db.find_by_guid(acc['#value'].get('Банк'))).get('#value') or dict())
             if bankName:
                 temp['bankName'] = bankName.get('Description') or ""
@@ -105,12 +107,15 @@ class JSONPermute:
             del temp
         cash_acc = self.db.get_items('Справочники', {"#type": "jcfg:CatalogObject.Кассы", "#value.Owner.#value": self.item['#value']['Ref']})
         for acc in cash_acc:
+            if not acc:
+                continue
             temp = {}
             if acc.get('#mywh'):
                 if acc['#mywh'].get('meta'):
                     temp['meta'] = acc['#mywh']['meta']
             temp['accountNumber'] = acc['#value']['Description']
-            temp['bankLocation'] = acc['#value']['Ref']
+            if not acc.get('#mywh'):
+                temp['bankLocation'] = acc['#value']['Ref']
             result['accounts'].append(temp)
             del temp
         return result
@@ -119,15 +124,21 @@ class JSONPermute:
         result = {}
         result['name'] = self.item['#value'].get('Description', "")
         result['description'] = f'Документ создан автоматически на основании {self.item["#value"]["Ref"]}'
-        result['uom'] = {"meta": {
-                "href": "https://online.moysklad.ru/api/remap/1.2/entity/uom/19f1edc0-fc42-4001-94cb-c9ec9c62ec10", #вот эту хуйню не забудь поменять, иначе пизда
-                "metadataHref": "https://online.moysklad.ru/api/remap/1.2/entity/uom/metadata",
-                "type": "uom",
-                "mediaType": "application/json"
-                }
-            }
+        result['uom'] = DEFAULT_UOM
+        result['group'] = DEFAULT_GROUP
         result['article'] = self.item['#value'].get('Артикул') or ""
         result['shared'] = True
+        # result['salePrice'] = []
+        # for price in self.db.get_items('Справочники', {'#type': "jcfg:CatalogObject.ВидыЦен", "#value.IsFolder": False}):
+        #     temp = {}
+        #     temp['value'] = self._find_date_price_by_guid(guid=self.item["#value"]["Ref"], date=dt.datetime.now(), price_type=price['#value']['Ref'])
+        #     if price.get('#mywh', {}).get('meta', {}):
+        #         temp['priceType']  = {'meta': price.get('#mywh', {}).get('meta', {})}
+        #     else:
+        #         temp['priceType'] = price.get('#value', {}).get('Description', '')
+        #     temp['currency'] = DEFAULT_CURRENCY
+        #     result.append(temp)
+        #     del temp
         return result
     
     def _permute_counterparty(self):
@@ -139,15 +150,23 @@ class JSONPermute:
         result['kpp'] = self.item['#value'].get('КПП') or ""
         result['shared'] = True
         result['description'] = f'Документ создан автоматически на основании {self.item["#value"]["Ref"]}'
-        result['accounts'] = []
+        result['tag'] = [DEFAULT_TAG, 'Выгружено из 1С']
+        result['group'] = DEFAULT_GROUP
+        result['accounts'] = [{'accountNumber': 'Счет для документов без счета', 'isDefault': True}]
         accounts = self.db.get_items('Справочники', {"#type": "jcfg:CatalogObject.БанковскиеСчетаКонтрагентов", "#value.Owner.#value": self.item['#value']['Ref']})
+        # for contact in self.item['#value'].get('КонтактнаяИнформация', []): #потом доделаю адреса
+        #     if contact.get('Тип') == 'Адрес':
+
         for acc in accounts:
+            if not acc:
+                continue
             temp = {}
             if acc.get('#mywh'):
                 if acc['#mywh'].get('meta'):
-                    temp['meta'] = acc['#mywh'].get('meta')
+                    temp['meta'] = acc['#mywh']['meta']
             temp['accountNumber'] = acc['#value']['НомерСчета']
-            temp['bankLocation'] = acc['#value']['Ref']
+            if not acc.get('#mywh'):
+                temp['bankLocation'] = acc['#value']['Ref']
             bankName = (next(self.db.find_by_guid(acc['#value'].get('Банк'))).get('#value') or dict())
             if bankName:
                 temp['bankName'] = bankName.get('Description') or ""
@@ -159,11 +178,13 @@ class JSONPermute:
         result = {}
         result['name'] = '-'.join([self.item['#value'].get('Description') or self.item['#value']['Ref'], "CG"])
         result['description'] = self.item['#value'].get('Описание') or ""
+        result['group'] = DEFAULT_GROUP
         return result
 
     def _permute_store(self):
         result = {}
         result['name'] = self.item['#value'].get('Description') or ""
+        result['group'] = DEFAULT_GROUP
         return result
 
     def _permute_supply(self):
@@ -178,14 +199,17 @@ class JSONPermute:
         organization_account_meta = self.get_meta_by_guid(self.item['#value']['БанковскийСчетОрганизации'])
         if organization_account_meta:
             result['organizationAccount'] = {'meta': organization_account_meta}
+        elif DEFAULT_ORGANIZATION_ACCOUNTS.get(self.item['#value']['Организация']):
+            result['organizationAccount'] = DEFAULT_ORGANIZATION_ACCOUNTS.get(self.item['#value']['Организация'])
         result['shared'] = True
         result['store'] = {'meta': self.get_meta_by_guid(self.item['#value']['Склад'])}
+        result['group'] = DEFAULT_GROUP
         result['positions'] = []
         result['description'] = f'Документ создан автоматически на основании {self.item["#value"]["Ref"]}'
         for pos in self.item['#value'].get('Товары', []):
             temp = {}
             temp['assortment'] = {'meta': self.get_meta_by_guid(pos.get('Номенклатура'))}
-            temp['price'] = int(round(pos['Сумма']*100/pos['Количество'], 0))
+            temp['price'] = int(round(max(pos['Сумма'], pos.get('СуммаСНДС', 0))*100/pos['Количество'], 0))
             temp['quantity'] = pos['Количество']
             temp['vat'] = (NDS_COMPARE.get(pos['СтавкаНДС'], [0, False]))[0]
             temp['vatEnabled'] = (NDS_COMPARE.get(pos['СтавкаНДС'], [0, False]))[1]
@@ -201,11 +225,12 @@ class JSONPermute:
         result['shared'] = True
         result['store'] = {'meta': self.get_meta_by_guid(self.item['#value'].get('Склад'))}
         result['description'] = "\n".join([self.item['#value'].get('Комментарий'), f'Документ создан автоматически на основании {self.item["#value"]["Ref"]}']).strip()
+        result['group'] = DEFAULT_GROUP
         result['positions'] = []
         for pos in self.item['#value'].get('Товары', []):
             temp = {}
             temp['assortment'] = {'meta': self.get_meta_by_guid(pos.get('Номенклатура'))}
-            temp['price'] = int(round(pos['Сумма']*100/pos['Количество'], 0))
+            temp['price'] = int(round(max(pos['Сумма'], pos.get('СуммаСНДС', 0))*100/pos['Количество'], 0))
             temp['quantity'] = pos['Количество']
             result['positions'].append(temp)
         del temp
@@ -223,14 +248,17 @@ class JSONPermute:
         organization_account_meta = self.get_meta_by_guid(self.item['#value'].get('БанковскийСчетОрганизации'))
         if organization_account_meta:
             result['organizationAccount'] = {'meta': organization_account_meta}
+        elif DEFAULT_ORGANIZATION_ACCOUNTS.get(self.item['#value']['Организация']):
+            result['organizationAccount'] = DEFAULT_ORGANIZATION_ACCOUNTS.get(self.item['#value']['Организация'])
         result['shared'] = True
         result['store'] = {'meta': self.get_meta_by_guid(self.item['#value'].get('Склад'))} 
-        result['description'] = f'Документ создан автоматически на основании {self.item["#value"]["Ref"]}' 
+        result['description'] = f'Документ создан автоматически на основании {self.item["#value"]["Ref"]}'
+        result['group'] = DEFAULT_GROUP
         result['positions'] = []
         for pos in self.item['#value'].get('Товары', []):
             temp = {}
             temp['assortment'] = {'meta': self.get_meta_by_guid(pos.get('Номенклатура'))}
-            temp['price'] = int(round(pos['Сумма']*100/pos['Количество'], 0))
+            temp['price'] = int(round(max(pos['Сумма'], pos.get('СуммаСНДС', 0))*100/pos['Количество'], 0))
             temp['quantity'] = pos['Количество']
             temp['vat'] = (NDS_COMPARE.get(pos['СтавкаНДС'], [0, False]))[0]
             temp['vatEnabled'] = (NDS_COMPARE.get(pos['СтавкаНДС'], [0, False]))[1]
@@ -238,7 +266,7 @@ class JSONPermute:
             del temp
         supply = self.get_meta_by_guid(self.item['#value'].get('ДокументПоступления'))
         if supply:
-            result['supply'] = {'meta': supply} #вот эту хуйню проверь потом
+            result['supply'] = {'meta': supply} 
         return result
 
     def _permute_customerorder(self):
@@ -253,14 +281,18 @@ class JSONPermute:
         organization_account_meta = self.get_meta_by_guid(self.item['#value'].get('БанковскийСчетОрганизации'))
         if organization_account_meta:
             result['organizationAccount'] = {'meta': organization_account_meta}
+        elif DEFAULT_ORGANIZATION_ACCOUNTS.get(self.item['#value']['Организация']):
+            result['organizationAccount'] = DEFAULT_ORGANIZATION_ACCOUNTS.get(self.item['#value']['Организация'])
         result['shared'] = True
         result['store'] = {'meta': self.get_meta_by_guid(self.item['#value'].get('Склад'))}
         result['description'] = f'Документ создан автоматически на основании {self.item["#value"]["Ref"]}'
+        result['group'] = DEFAULT_GROUP
+        result['state'] = DEFAULT_STATE
         result['positions'] = []
         for pos in self.item['#value'].get('Товары', []):
             temp = {}
             temp['assortment'] = {'meta': self.get_meta_by_guid(pos.get('Номенклатура'))}
-            temp['price'] = int(round(pos['Сумма']*100/pos['Количество'], 0))
+            temp['price'] = int(round(max(pos['Сумма'], pos.get('СуммаСНДС', 0))*100/pos['Количество'], 0))
             temp['quantity'] = pos['Количество']
             temp['vat'] = (NDS_COMPARE.get(pos['СтавкаНДС'], [0, False]))[0]
             temp['vatEnabled'] = (NDS_COMPARE.get(pos['СтавкаНДС'], [0, False]))[1]
@@ -281,14 +313,17 @@ class JSONPermute:
         organization_account_meta = self.get_meta_by_guid(self.item['#value'].get('БанковскийСчетОрганизации'))
         if organization_account_meta:
             result['organizationAccount'] = {'meta': organization_account_meta}
+        elif DEFAULT_ORGANIZATION_ACCOUNTS.get(self.item['#value']['Организация']):
+            result['organizationAccount'] = DEFAULT_ORGANIZATION_ACCOUNTS.get(self.item['#value']['Организация'])
         result['shared'] = True
         result['store'] = {'meta': self.get_meta_by_guid(self.item['#value'].get('Склад'))}
         result['description'] = f'Документ создан автоматически на основании {self.item["#value"]["Ref"]}'
+        result['group'] = DEFAULT_GROUP
         result['positions'] = []
         for pos in self.item['#value'].get('Товары', []):
             temp = {}
             temp['assortment'] = {'meta': self.get_meta_by_guid(pos.get('Номенклатура'))}
-            temp['price'] = int(round(pos['Сумма']*100/pos['Количество'], 0))
+            temp['price'] = int(round(max(pos['Сумма'], pos.get('СуммаСНДС', 0))*100/pos['Количество'], 0))
             temp['quantity'] = pos['Количество']
             temp['vat'] = (NDS_COMPARE.get(pos['СтавкаНДС'], [0, False]))[0]
             temp['vatEnabled'] = (NDS_COMPARE.get(pos['СтавкаНДС'], [0, False]))[1]
@@ -311,14 +346,17 @@ class JSONPermute:
         organization_account_meta = self.get_meta_by_guid(self.item['#value'].get('БанковскийСчетОрганизации'))
         if organization_account_meta:
             result['organizationAccount'] = {'meta': organization_account_meta}
+        elif DEFAULT_ORGANIZATION_ACCOUNTS.get(self.item['#value']['Организация']):
+            result['organizationAccount'] = DEFAULT_ORGANIZATION_ACCOUNTS.get(self.item['#value']['Организация'])
         result['shared'] = True
         result['store'] = {'meta': self.get_meta_by_guid(self.item['#value'].get('Склад'))}
         result['description'] = f'Документ создан автоматически на основании {self.item["#value"]["Ref"]}'
+        result['group'] = DEFAULT_GROUP
         result['positions'] = []
         for pos in self.item['#value'].get('Товары', []):
             temp = {}
             temp['assortment'] = {'meta': self.get_meta_by_guid(pos.get('Номенклатура'))}
-            temp['price'] = int(round(pos['Сумма']*100/pos['Количество'], 0))
+            temp['price'] = int(round(max(pos['Сумма'], pos.get('СуммаСНДС', 0))*100/pos['Количество'], 0))
             temp['quantity'] = pos['Количество']
             temp['vat'] = (NDS_COMPARE.get(pos['СтавкаНДС'], [0, False]))[0]
             temp['vatEnabled'] = (NDS_COMPARE.get(pos['СтавкаНДС'], [0, False]))[1]
@@ -338,6 +376,7 @@ class JSONPermute:
         result['store'] = {'meta': self.get_meta_by_guid(self.item['#value'].get('Склад'))}
         result['description'] = f'Документ создан автоматически на основании {self.item["#value"]["Ref"]}'
         expenseItem = self.get_meta_by_guid(self.item['#value']['СтатьяРасходов']).get('#value', {}).get('Description', '')
+        result['group'] = DEFAULT_GROUP
         result['positions'] = []
         for pos in self.item['#value'].get('Товары', []):
             temp = {}
@@ -354,7 +393,9 @@ class JSONPermute:
         result['organization'] = {'meta': self.get_meta_by_guid(self.item['#value'].get('Организация'))}
         organization_account_meta = self.get_meta_by_guid(self.item['#value'].get('БанковскийСчетОрганизации'))
         if organization_account_meta:
-            result['organizationAccount'] = {'meta': organization_account_meta}     
+            result['organizationAccount'] = {'meta': organization_account_meta} 
+        elif DEFAULT_ORGANIZATION_ACCOUNTS.get(self.item['#value']['Организация']):
+            result['organizationAccount'] = DEFAULT_ORGANIZATION_ACCOUNTS.get(self.item['#value']['Организация'])    
         if self.item['#value']['ХозяйственнаяОперация'] == "ПоступлениеДенежныхСредствСДругогоСчета":
             result['agent'] = result['organization']
             agent_account_meta = self.get_meta_by_guid(self.item['#value'].get('БанковскийСчетОтправитель'))
@@ -367,10 +408,10 @@ class JSONPermute:
                 result['agentAccount'] = {'meta': agent_account_meta}
         result['applicable'] = self.item['#value'].get('Posted', False)
         result['moment'] = self.date_convert(self.item['#value'].get('Date', ""))
-        
         result['shared'] = True
         result['sum'] = int(round(self.item['#value'].get('СуммаДокумента', 0)*100, 0))
         result['description'] = '\n'.join([self.item['#value'].get('НазначениеПлатежа', ''), f'Документ создан автоматически на основании {self.item["#value"]["Ref"]}']).strip()
+        result['group'] = DEFAULT_GROUP
         result['operations'] = []
         for pos in self.item['#value'].get('РасшифровкаПлатежа', []):
             temp = {}
@@ -389,6 +430,8 @@ class JSONPermute:
         organization_account_meta = self.get_meta_by_guid(self.item['#value'].get('БанковскийСчет'))
         if organization_account_meta:
             result['organizationAccount'] = {'meta': organization_account_meta}
+        elif DEFAULT_ORGANIZATION_ACCOUNTS.get(self.item['#value']['Организация']):
+            result['organizationAccount'] = DEFAULT_ORGANIZATION_ACCOUNTS.get(self.item['#value']['Организация'])
         if self.item['#value']['ХозяйственнаяОперация'] == "ПеречислениеДенежныхСредствНаДругойСчет":
             result['agent'] = result['organization']
             agent_account_meta = self.get_meta_by_guid(self.item['#value'].get('БанковскийСчетПолучатель'))
@@ -407,7 +450,7 @@ class JSONPermute:
         
         result['applicable'] = self.item['#value'].get('Posted', False)
         result['moment'] = self.date_convert(self.item['#value'].get('Date', ""))
-
+        result['group'] = DEFAULT_GROUP
         result['shared'] = True
         result['sum'] = int(round(self.item['#value'].get('СуммаДокумента', 0)*100, 0))
         result['description'] = f'Документ создан автоматически на основании {self.item["#value"]["Ref"]}'
@@ -421,7 +464,7 @@ class JSONPermute:
                     result['expenseItem'] = {'meta': self.get_meta_by_guid(pos['СтатьяРасходов']['#value'])}
                 else:
                     result['expenseItem'] = {'meta': self.get_meta_by_guid("639c7631-7669-11e5-a965-3085a9eabb90")}
-            new_string = ' '.join([pos.get('Содержание', ""), 'Сумма', str(pos['Сумма'])]).strip()
+            new_string = ' '.join([pos.get('Содержание', ""), 'Сумма', str(max(pos['Сумма'], pos.get('СуммаСНДС', 0)))]).strip()
             result['paymentPurpose'] = '\n'.join([new_string, result['paymentPurpose']]).strip()
         return result
 
@@ -433,6 +476,7 @@ class JSONPermute:
         result['targetStore'] = {'meta': self.get_meta_by_guid(self.item['#value'].get('СкладПолучатель'))}
         result['description'] = f'Документ создан автоматически на основании {self.item["#value"]["Ref"]}'
         result['applicable'] = self.item['#value'].get('Posted', False)
+        result['group'] = DEFAULT_GROUP
         result['positions'] = []
         for pos in self.item['#value'].get('Товары', []):
             temp = {}
@@ -444,30 +488,25 @@ class JSONPermute:
 
     def _permute_retaildemand(self):
         result = {}
-        result['agent'] = {"meta": {
-        "href": "https://online.moysklad.ru/api/remap/1.2/entity/counterparty/c8e8b1ab-0db2-11ed-0a80-061e0025fb5c",
-        "metadataHref": "https://online.moysklad.ru/api/remap/1.2/entity/counterparty/metadata",
-        "type": "counterparty",
-        "mediaType": "application/json",
-        "uuidHref": "https://online.moysklad.ru/app/#company/edit?id=c8e8b1ab-0db2-11ed-0a80-061e0025fb5c"
-        }} #здесь должна быть meta для контрагента "Розничный покупатель"
+        result['agent'] = DEFAULT_RETAIL_CUSTOMER #здесь должна быть meta для контрагента "Розничный покупатель"
         agent_account_meta = {} 
         if agent_account_meta:
             result['agentAccount'] = {'meta': agent_account_meta} #мета счета "Розничный покупатель"
         result['applicable'] = self.item['#value'].get('Posted', False)
         result['moment'] = self.date_convert(self.item['#value'].get('Date', ""))
         result['organization'] = {'meta': self.get_meta_by_guid(self.item['#value'].get('Организация'))} 
-        #result['organizationAccount'] = {} #здесь должны быть meta для счета организации
+        result['organizationAccount'] = DEFAULT_ORGANIZATION_RETAIL_ACC.get(self.item['#value']['Организация'])
         result['shared'] = True
         result['store'] = {'meta': self.get_meta_by_guid(self.item['#value'].get('Склад'))}
         result['description'] = f'Документ создан автоматически на основании {self.item["#value"]["Ref"]}'
+        result['group'] = DEFAULT_GROUP
         result['positions'] = []
         for pos in self.item['#value'].get('Товары', []):
             if pos['Количество'] < 0:
                 continue
             temp = {}
             temp['assortment'] = {'meta': self.get_meta_by_guid(pos.get('Номенклатура'))}
-            temp['price'] = int(round(pos['Сумма']*100/pos['Количество'], 0))
+            temp['price'] = int(round(max(pos['Сумма'], pos.get('СуммаСНДС', 0))*100/pos['Количество'], 0))
             temp['quantity'] = pos['Количество']
             temp['vat'] = (NDS_COMPARE.get(pos['СтавкаНДС'], [0, False]))[0]
             temp['vatEnabled'] = (NDS_COMPARE.get(pos['СтавкаНДС'], [0, False]))[1]
@@ -477,22 +516,15 @@ class JSONPermute:
 
     def _permute_salesreturn_from_retail(self):
         result = {}
-        result['agent'] = {"meta": {
-        "href": "https://online.moysklad.ru/api/remap/1.2/entity/counterparty/c8e8b1ab-0db2-11ed-0a80-061e0025fb5c",
-        "metadataHref": "https://online.moysklad.ru/api/remap/1.2/entity/counterparty/metadata",
-        "type": "counterparty",
-        "mediaType": "application/json",
-        "uuidHref": "https://online.moysklad.ru/app/#company/edit?id=c8e8b1ab-0db2-11ed-0a80-061e0025fb5c"
-        }}
+        result['agent'] = DEFAULT_RETAIL_CUSTOMER
         agent_account_meta = {}
+        result['group'] = DEFAULT_GROUP
         if agent_account_meta:
             result['agentAccount'] = {'meta': agent_account_meta}
         result['applicable'] = self.item['#value'].get('Posted', False)
         result['moment'] = self.date_convert(self.item['#value'].get('Date', ""))
         result['organization'] = {'meta': self.get_meta_by_guid(self.item['#value'].get('Организация'))}
-        # organization_account_meta = self.get_meta_by_guid(self.item['#value'].get('БанковскийСчетОрганизации'))
-        # if organization_account_meta:
-        #     result['organizationAccount'] = {'meta': organization_account_meta}
+        result['organizationAccount'] = DEFAULT_ORGANIZATION_RETAIL_ACC.get(self.item['#value']['Организация'])
         result['shared'] = True
         result['store'] = {'meta': self.get_meta_by_guid(self.item['#value'].get('Склад'))}
         result['description'] = f'Документ создан автоматически на основании {self.item["#value"]["Ref"]}'
@@ -502,7 +534,7 @@ class JSONPermute:
                 continue
             temp = {}
             temp['assortment'] = {'meta': self.get_meta_by_guid(pos.get('Номенклатура'))}
-            temp['price'] = int(round(pos['Сумма']*100/pos['Количество'], 0))
+            temp['price'] = int(round(max(pos['Сумма'], pos.get('СуммаСНДС', 0))*100/pos['Количество'], 0))
             temp['quantity'] = abs(pos['Количество'])
             temp['vat'] = (NDS_COMPARE.get(pos['СтавкаНДС'], [0, False]))[0]
             temp['vatEnabled'] = (NDS_COMPARE.get(pos['СтавкаНДС'], [0, False]))[1]
@@ -522,14 +554,17 @@ class JSONPermute:
         organization_account_meta = self.get_meta_by_guid(self.item['#value'].get('БанковскийСчетОрганизации'))
         if organization_account_meta:
             result['organizationAccount'] = {'meta': organization_account_meta}
+        elif DEFAULT_ORGANIZATION_ACCOUNTS.get(self.item['#value']['Организация']):
+            result['organizationAccount'] = DEFAULT_ORGANIZATION_ACCOUNTS.get(self.item['#value']['Организация'])
         result['shared'] = True
         result['sum'] = int(round(self.item['#value'].get('СуммаДокумента', 0)*100, 0))
         result['description'] = f'Документ создан автоматически на основании {self.item["#value"]["Ref"]}'
+        result['group'] = DEFAULT_GROUP
         result['paymentPurpose'] = ''
         for pos in self.item['#value'].get('Расходы', []):
             if not result.get('expenseItem'):
                 result['expenseItem'] = {'meta': self.get_meta_by_guid(pos['СтатьяРасходов']['#value'])}
-            new_string = ' '.join([pos['Содержание'], 'Сумма', str(pos['Сумма'])])
+            new_string = ' '.join([pos['Содержание'], 'Сумма', str(max(pos['Сумма'], pos.get('СуммаСНДС', 0)))])
             result['paymentPurpose'] = '\n'.join([new_string, result['paymentPurpose']]).strip()
         return result
 
@@ -541,6 +576,7 @@ class JSONPermute:
         result['shared'] = True
         result['store'] = {'meta': self.get_meta_by_guid(self.item['#value'].get('Склад'))}
         result['description'] = f'Документ создан автоматически на основании {self.item["#value"]["Ref"]}'
+        result['group'] = DEFAULT_GROUP
         result['positions'] = []
         for pos in self.item['#value'].get('Товары', []):
             temp = {}
@@ -564,9 +600,12 @@ class JSONPermute:
         organization_account_meta = self.get_meta_by_guid(self.item['#value'].get('Касса'))
         if organization_account_meta:
             result['organizationAccount'] = {'meta': organization_account_meta}
+        elif DEFAULT_ORGANIZATION_ACCOUNTS.get(self.item['#value']['Организация']):
+            result['organizationAccount'] = DEFAULT_ORGANIZATION_ACCOUNTS.get(self.item['#value']['Организация'])
         result['shared'] = True
         result['sum'] = int(round(self.item['#value'].get('СуммаДокумента', 0)*100, 0))
         result['description'] = f'Документ создан автоматически на основании {self.item["#value"]["Ref"]}'
+        result['group'] = DEFAULT_GROUP
         result['operations'] = []
         for pos in self.item['#value'].get('РасшифровкаПлатежа', []):
             temp = {}
@@ -591,17 +630,20 @@ class JSONPermute:
         organization_account_meta = self.get_meta_by_guid(self.item['#value'].get('Касса'))
         if organization_account_meta:
             result['organizationAccount'] = {'meta': organization_account_meta}
+        elif DEFAULT_ORGANIZATION_ACCOUNTS.get(self.item['#value']['Организация']):
+            result['organizationAccount'] = DEFAULT_ORGANIZATION_ACCOUNTS.get(self.item['#value']['Организация'])
         result['shared'] = True
         result['sum'] = 0
         result['paymentPurpose'] = ''
         result['description'] = f'Документ создан автоматически на основании {self.item["#value"]["Ref"]}'
+        result['group'] = DEFAULT_GROUP
         for pos in self.item['#value'].get('РасшифровкаПлатежа', []):
             if not result.get('expenseItem'):
                 if is_guid(pos['СтатьяРасходов']['#value']):
                     result['expenseItem'] = {'meta': self.get_meta_by_guid(pos['СтатьяРасходов']['#value'])}
                 else:
                     result['expenseItem'] = {'meta': self.get_meta_by_guid('639c7631-7669-11e5-a965-3085a9eabb90')}
-            new_string = ' '.join([pos['Комментарий'], 'Сумма', str(pos['Сумма'])])
+            new_string = ' '.join([pos['Комментарий'], 'Сумма', str(max(pos['Сумма'], pos.get('СуммаСНДС', 0)))])
             result['paymentPurpose'] = '\n'.join([new_string, result['paymentPurpose']]).strip()
             result['sum'] += int(round(pos.get('СуммаДокумента', 0)*100, 0))
         return result
@@ -610,59 +652,61 @@ class JSONPermute:
         if not self.item:
             return {}
         result = {}
-        if self.item.get('#mywh', {}).get('meta', None) and not update_meta:
-            result['meta'] = self.item['#mywh'].get('meta')
-        
         if self.item_type == 'organization':
             result.update(self._permute_organization())
-        if self.item_type == 'product':
-            result.update(self._permute_product())
-        if self.item_type == 'service':
-            result.update(self._permute_product())
         if self.item_type == 'counterparty':
             result.update(self._permute_counterparty())
-        # if self.item_type == 'counterpartyadjustment':
-        #     result.update(self._permute_counterpartyadjustment())
-        if self.item_type == 'expenseitem':
-            result.update(self._permute_expenseitem())
-        if self.item_type == 'store':
-            result.update(self._permute_store())
-        if self.item_type == 'supply':
-            result.update(self._permute_supply())
-        if self.item_type == 'enter':
-            result.update(self._permute_enter())
-        if self.item_type == 'move':
-            result.update(self._permute_move())
-        if self.item_type == 'purchasereturn':
-            result.update(self._permute_purchasereturn())
-        if self.item_type == 'customerorder':
-            result.update(self._permute_customerorder())
-        if self.item_type == 'demand':
-            result.update(self._permute_demand())
-        if self.item_type == 'salesreturn':
-            result.update(self._permute_salesreturn())
-        if self.item_type == 'loss':
-            result.update(self._permute_loss())
-        if self.item_type == 'paymentin':
-            result.update(self._permute_paymentin())
-        if self.item_type == 'paymentout':
-            result.update(self._permute_paymentout())
-        # if self.item_type == 'cashin':
-        #    result.update(self._permute_cashin())
-        # if self.item_type == 'cashout':
-        #     result.update(self._permute_cashout())
-        if self.item_type == 'retaildemand':
-            result.update(self._permute_retaildemand())
-        if self.item_type == 'payment_out_from_services_purchase':
-            result.update(self._permute_payment_out_from_services_purchase())
-        if self.item_type == 'salesreturn_from_retail':
-            result.update(self._permute_salesreturn_from_retail())
-        if self.item_type == 'loss_from_internal':
-            result.update(self._permute_loss_from_internal())
-        if self.item_type == 'paymentin_from_orders':
-            result.update(self._permute_paymentin_from_orders())
-        if self.item_type == 'paymentout_from_orders':
-            result.update(self._permute_paymentout_from_orders())
+        if self.item.get('#mywh', {}).get('meta', None) and not update_meta:
+            result['meta'] = self.item['#mywh'].get('meta')
+        else:
+            if self.item_type == 'product':
+                result.update(self._permute_product())
+            if self.item_type == 'service':
+                result.update(self._permute_product())
+            if self.item_type == 'counterparty':
+                result.update(self._permute_counterparty())
+            # if self.item_type == 'counterpartyadjustment':
+            #     result.update(self._permute_counterpartyadjustment())
+            if self.item_type == 'expenseitem':
+                result.update(self._permute_expenseitem())
+            if self.item_type == 'store':
+                result.update(self._permute_store())
+            if self.item_type == 'supply':
+                result.update(self._permute_supply())
+            if self.item_type == 'enter':
+                result.update(self._permute_enter())
+            if self.item_type == 'move':
+                result.update(self._permute_move())
+            if self.item_type == 'purchasereturn':
+                result.update(self._permute_purchasereturn())
+            if self.item_type == 'customerorder':
+                result.update(self._permute_customerorder())
+            if self.item_type == 'demand':
+                result.update(self._permute_demand())
+            if self.item_type == 'salesreturn':
+                result.update(self._permute_salesreturn())
+            if self.item_type == 'loss':
+                result.update(self._permute_loss())
+            if self.item_type == 'paymentin':
+                result.update(self._permute_paymentin())
+            if self.item_type == 'paymentout':
+                result.update(self._permute_paymentout())
+            # if self.item_type == 'cashin':
+            #    result.update(self._permute_cashin())
+            # if self.item_type == 'cashout':
+            #     result.update(self._permute_cashout())
+            if self.item_type == 'retaildemand':
+                result.update(self._permute_retaildemand())
+            if self.item_type == 'payment_out_from_services_purchase':
+                result.update(self._permute_payment_out_from_services_purchase())
+            if self.item_type == 'salesreturn_from_retail':
+                result.update(self._permute_salesreturn_from_retail())
+            if self.item_type == 'loss_from_internal':
+                result.update(self._permute_loss_from_internal())
+            if self.item_type == 'paymentin_from_orders':
+                result.update(self._permute_paymentin_from_orders())
+            if self.item_type == 'paymentout_from_orders':
+                result.update(self._permute_paymentout_from_orders())
         
         return result
 

@@ -38,6 +38,7 @@ class CrowdGamesDB:
         db_logger.info(f'Starting import DB.')
         db_logger.info(f'Current path of copied DB: {db_path}')
         error_count = 0
+        refs_list = []
         if skip_by_logs:
             readed_files = list(get_readed_files())
         else:
@@ -48,6 +49,7 @@ class CrowdGamesDB:
                 db_logger.info(f'Current working directory: {directory}')
                 with self.client.start_session() as session:
                     collection = self.client[self.db][directory]
+                    #collection.create_index({"#value.Ref": "text"}, {'unique': True})
                     for subdirectory in os.listdir(f'{db_path}\{directory}'):
                         db_logger.info(f'Current working directory: {directory}\{subdirectory}')
                         data_to_insert = {subdirectory: []}
@@ -57,9 +59,8 @@ class CrowdGamesDB:
                                     data = json.load(f)
                                     db_logger.info(f'{os.path.join(db_path, directory, subdirectory, file)} was readed')
                                     if skip_exists_ref:
-                                        if next(self.find_by_guid(data["#value"].get('Ref'))):
-                                            continue
-                                        else:
+                                        if (data["#value"].get('Ref') not in refs_list) and not next(self.find_by_guid(data["#value"].get('Ref'))):
+                                            refs_list.append(data["#value"].get('Ref', "Undiefined"))
                                             data_to_insert[subdirectory].append(InsertOne(data))
                                     else:
                                         data_to_insert[subdirectory].append(InsertOne(data))
@@ -115,7 +116,7 @@ class CrowdGamesDB:
         try:
             with self.client.start_session() as session:
                 collection = COLLECTIONS_COMPARE.get(data_to_update["#type"].split('.')[0].split(':')[-1])
-                updated = self.client[self.db][collection].update_one({'#type':data_to_update['#type'], "#value.Ref": data_to_update['#value']['Ref']}, {'$set':{'#mywh':{'meta': data}}}, session=session)
+                updated = self.client[self.db][collection].update_one({'#type':data_to_update['#type'], "#value.Ref": data_to_update['#value']['Ref']}, {'$set':{'#mywh.meta': data}}, session=session)
                 db_logger.info(f'In {collection} in document ref {guid} was maded {updated.modified_count} modifications.')
                 db_logger.debug(f'Updating metadata: \n{json.dumps(data, indent=4, ensure_ascii=False)}')
                 return True
@@ -195,9 +196,10 @@ if __name__ == '__main__':
         }
     }
 ]
-    inst = CrowdGamesDB()
-   # inst.import_db(skip_exists_ref=True, read_directorys=['Документы'])
-    inst.delete_all_mywh(collection=['ПланыВидовХарактеристик']) #{"#type": {"$in":["jcfg:DocumentObject.РеализацияТоваровУслуг", "jcfg:DocumentObject.ПоступлениеБезналичныхДенежныхСредств", "jcfg:DocumentObject.СписаниеНедостачТоваров", "jcfg:DocumentObject.СписаниеБезналичныхДенежныхСредств", "jcfg:DocumentObject.СписаниеБезналичныхДенежныхСредств"]}})
-    inst.drop_duplicates_by_ref('ПланыВидовХарактеристик', duplicates_pipeline)
+    inst = CrowdGamesDB('CrowdGamesActual')
+    #inst.import_db(skip_exists_ref=True, read_directorys=['Справочники'], db_path='D:\Никита\Работа\CrowdGames\Kek')
+    inst.delete_all_mywh(query={"#type": "jcfg:DocumentObject.ПриобретениеТоваровУслуг"}) #{"#type": {"$in":["jcfg:DocumentObject.РеализацияТоваровУслуг", "jcfg:DocumentObject.ПоступлениеБезналичныхДенежныхСредств", "jcfg:DocumentObject.СписаниеНедостачТоваров", "jcfg:DocumentObject.СписаниеБезналичныхДенежныхСредств", "jcfg:DocumentObject.СписаниеБезналичныхДенежныхСредств"]}})
+   # inst.drop_duplicates_by_ref('ПланыВидовХарактеристик', duplicates_pipeline)
+    #inst.update_item("7a6c6eee-fb57-11e7-80d6-00505691ab3c", 'loshad')
     print('Success')
 
