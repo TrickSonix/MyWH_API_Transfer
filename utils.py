@@ -1,11 +1,8 @@
-#import pandas as pd
-#import numpy as np
-#import os
-from ast import operator
+import os
 import re
 import datetime as dt
-from setup import COMPANY_TYPES, NDS_COMPARE, DEFAULT_GROUP, DEFAULT_TAG, DEFAULT_UOM, DEFAULT_CURRENCY, DEFAULT_RETAIL_CUSTOMER, DEFAULT_ORGANIZATION_ACCOUNTS, DEFAULT_ORGANIZATION_RETAIL_ACC, DEFAULT_STATE
-
+from setup import COMPANY_TYPES, DEFAULT_EXPENSE_ITEM, NDS_COMPARE, DEFAULT_GROUP, DEFAULT_TAG, DEFAULT_UOM, DEFAULT_CURRENCY, DEFAULT_RETAIL_CUSTOMER, DEFAULT_ORGANIZATION_ACCOUNTS, DEFAULT_ORGANIZATION_RETAIL_ACC, DEFAULT_STATE, DEFAULT_STORE, DEFAULT_SERVICE
+from openpyxl import load_workbook, Workbook
 
 def damerau_levenshtein_distance(s1, s2):
     d = {}
@@ -44,6 +41,73 @@ def is_guid(s: str) -> bool:
         return True
     else:
         return False
+
+def transform_logs_into_excel(file_path, db):
+        wb = Workbook()
+        ws = wb.active
+        ws.cell(1,1, value="Document type")
+        ws.cell(1, 2, value="Document number")
+        ws.cell(1,3, value='Document Date')
+        ws.cell(1,4, value='Problem')
+        row_count = 2
+        with open(file_path, 'r', encoding='utf-8')as f:
+            for n, line in enumerate(f.readlines()):
+                splitted_line = line.split(' ')
+                if 'ERROR' in line:
+                    db_item = next(db.find_by_guid(next(filter(is_guid, splitted_line))))
+                    ws.cell(row_count, 1, value=db_item['#type'].split('.')[-1])
+                    ws.cell(row_count, 2, value=db_item['#value']['Number'])
+                    ws.cell(row_count, 3, value=db_item['#value']['Date'])
+                if n%2==1:
+                    ws.cell(row_count, 4, value=line)
+                    row_count +=1
+        
+        file_name = f'Excel_{file_path.split("/")[-1].split(".")[0]}.xlsx'
+        wb.save(filename=file_name)
+
+def make_error_report_from_log(log_path, time_mark, db=None):
+    report_lines = []
+    write_mark = False
+    cur_time = time_mark
+    with open(log_path, 'r', encoding='utf-8') as f:
+        for line in f.readlines():
+            line_splitted = line.split(' ')
+            try:
+                cur_time = dt.datetime.strptime(' '.join(line_splitted[:2])[:-4], "%Y-%m-%d %H:%M:%S")
+                write_mark = False
+            except ValueError:
+                if write_mark:
+                    report_lines.append(line)
+            if cur_time >= time_mark:
+                if 'ERROR' in line:
+                    report_lines.append(line)
+                    write_mark = True
+    file_name = f'error_report_{log_path.split("/")[-1].split(".")[0]}_from_{dt.datetime.now().strftime("%Y-%m-%d-%H-%M")}.log'
+    new_dir = dt.datetime.now().strftime("%Y-%m-%d")
+    if not os.path.exists(f'logs/error_reports_{new_dir}'):
+        os.mkdir(f'logs/error_reports_{new_dir}')
+    with open(f'logs/error_reports_{new_dir}/{file_name}', 'w', encoding='utf-8') as f:
+        for line in report_lines:
+            f.write(line)
+    a = input(f'Transform {file_name} into excel?\n')
+    if a == 'y' and db:
+        transform_logs_into_excel(f'logs/error_reports_{new_dir}/{file_name}', db)
+    elif a=='y' and not db:
+        print('DB GDE?')
+
+def make_refs_list_from_error_log(error_log_path, in_file=False):
+    refs_list = []
+    with open(error_log_path, 'r', encoding='utf-8') as f:
+        for line in f.readlines():
+            refs_list.append(next(filter(is_guid, line.split(' '))))
+    if in_file:
+        file_name = error_log_path.split('/')[-1].split('.')[0]
+        with open(f'{file_name}_refs.txt', 'w', encoding='utf-8'):
+            for line in refs_list:
+                f.write(line)
+    else:
+        return refs_list
+
 
 
 class JSONPermute:
@@ -271,6 +335,7 @@ class JSONPermute:
 
     def _permute_customerorder(self):
         result = {}
+        result['name'] = ''.join(['CG-1C-', self.item['#value']['Number'].strip()])
         result['agent'] = {'meta': self.get_meta_by_guid(self.item['#value'].get('Контрагент'))}
         agent_account_meta = self.get_meta_by_guid(self.item['#value'].get('БанковскийСчетКонтрагента'))
         if agent_account_meta:
@@ -410,12 +475,13 @@ class JSONPermute:
         result['moment'] = self.date_convert(self.item['#value'].get('Date', ""))
         result['shared'] = True
         result['sum'] = int(round(self.item['#value'].get('СуммаДокумента', 0)*100, 0))
-        result['description'] = '\n'.join([self.item['#value'].get('НазначениеПлатежа', ''), f'Документ создан автоматически на основании {self.item["#value"]["Ref"]}']).strip()
+        result['description'] = f'Документ создан автоматически на основании {self.item["#value"]["Ref"]}'
         result['group'] = DEFAULT_GROUP
+        result['paymentPurpose'] = self.item['#value'].get('НазначениеПлатежа', '')
         result['operations'] = []
         for pos in self.item['#value'].get('РасшифровкаПлатежа', []):
             temp = {}
-            payment_base_meta = (self.get_meta_by_guid(pos.get('ОснованиеПлатежа', {}) or {}).get('#value'))
+            payment_base_meta = self.get_meta_by_guid(pos.get('УдалитьЗаказ', {}) or {}).get('#value', {}) or self.get_meta_by_guid((pos.get('ОснованиеПлатежа', {}) or {}).get('#value', {}))
             if payment_base_meta:
                 temp['meta'] = payment_base_meta
                 result['operations'].append(temp)
@@ -455,6 +521,7 @@ class JSONPermute:
         result['sum'] = int(round(self.item['#value'].get('СуммаДокумента', 0)*100, 0))
         result['description'] = f'Документ создан автоматически на основании {self.item["#value"]["Ref"]}'
         result['paymentPurpose'] = self.item['#value'].get('ФорматированноеНазначениеПлатежа', '')
+        result['operations'] = []
         if self.item['#value']['ХозяйственнаяОперация'] == "ПеречислениеДенежныхСредствНаДругойСчет":
             result['expenseItem'] = {'meta': self.get_meta_by_guid("639c7631-7669-11e5-a965-3085a9eabb90")}
         for pos in self.item['#value'].get('РасшифровкаПлатежа', []):
@@ -462,10 +529,17 @@ class JSONPermute:
                 ref = pos['СтатьяРасходов']['#value']
                 if is_guid(ref):
                     result['expenseItem'] = {'meta': self.get_meta_by_guid(pos['СтатьяРасходов']['#value'])}
-                else:
-                    result['expenseItem'] = {'meta': self.get_meta_by_guid("639c7631-7669-11e5-a965-3085a9eabb90")}
             new_string = ' '.join([pos.get('Содержание', ""), 'Сумма', str(max(pos['Сумма'], pos.get('СуммаСНДС', 0)))]).strip()
             result['paymentPurpose'] = '\n'.join([new_string, result['paymentPurpose']]).strip()
+            if (pos.get('УдалитьЗаказ', {}) or {}).get('Ref', {}) != self.item["#value"]['Ref']:
+                operation_meta = self.get_meta_by_guid(pos.get('УдалитьЗаказ', {}) or {}).get('#value', {}) or self.get_meta_by_guid((pos.get('ОснованиеПлатежа', {}) or {}).get('#value', {}))
+                if operation_meta:
+                    result['operations'].append({'meta': operation_meta})
+        if not result.get('expenseItem'):
+            result['expenseItem'] = DEFAULT_EXPENSE_ITEM
+        if not result.get('operations'):
+            result.pop('operations')
+                    
         return result
 
     def _permute_move(self):
@@ -542,30 +616,33 @@ class JSONPermute:
             del temp
         return result
 
-    def _permute_payment_out_from_services_purchase(self):
+    def _permute_supply_from_services_purchase(self):
         result = {}
-        result['agent'] = {'meta': self.get_meta_by_guid(self.item['#value'].get('Контрагент'))}
+        result['agent'] = {'meta': self.get_meta_by_guid(self.item['#value']['Контрагент'])}
         agent_account_meta = self.get_meta_by_guid(self.item['#value'].get('БанковскийСчетКонтрагента'))
         if agent_account_meta:
             result['agentAccount'] = {'meta': agent_account_meta}
         result['applicable'] = self.item['#value'].get('Posted', False)
         result['moment'] = self.date_convert(self.item['#value'].get('Date', ""))
-        result['organization'] = {'meta': self.get_meta_by_guid(self.item['#value'].get('Организация'))}
-        organization_account_meta = self.get_meta_by_guid(self.item['#value'].get('БанковскийСчетОрганизации'))
+        result['organization'] = {'meta': self.get_meta_by_guid(self.item['#value']['Организация'])}
+        organization_account_meta = self.get_meta_by_guid(self.item['#value']['БанковскийСчетОрганизации'])
         if organization_account_meta:
             result['organizationAccount'] = {'meta': organization_account_meta}
         elif DEFAULT_ORGANIZATION_ACCOUNTS.get(self.item['#value']['Организация']):
             result['organizationAccount'] = DEFAULT_ORGANIZATION_ACCOUNTS.get(self.item['#value']['Организация'])
         result['shared'] = True
-        result['sum'] = int(round(self.item['#value'].get('СуммаДокумента', 0)*100, 0))
-        result['description'] = f'Документ создан автоматически на основании {self.item["#value"]["Ref"]}'
+        result['store'] = DEFAULT_STORE
         result['group'] = DEFAULT_GROUP
-        result['paymentPurpose'] = ''
+        result['positions'] = []
+        result['description'] = f'Документ создан автоматически на основании {self.item["#value"]["Ref"]}'
         for pos in self.item['#value'].get('Расходы', []):
-            if not result.get('expenseItem'):
-                result['expenseItem'] = {'meta': self.get_meta_by_guid(pos['СтатьяРасходов']['#value'])}
-            new_string = ' '.join([pos['Содержание'], 'Сумма', str(max(pos['Сумма'], pos.get('СуммаСНДС', 0)))])
-            result['paymentPurpose'] = '\n'.join([new_string, result['paymentPurpose']]).strip()
+            temp = {}
+            temp['assortment'] = DEFAULT_SERVICE
+            temp['price'] = int(round(max(pos['Сумма'], pos.get('СуммаСНДС', 0))*100/(pos['Количество'] or 1), 0))
+            temp['quantity'] = pos['Количество'] or 1
+            result['positions'].append(temp)
+            result['description'] = '\n'.join([pos['Содержание'] , result['description']]).strip()
+        del temp
         return result
 
     def _permute_loss_from_internal(self):
@@ -609,7 +686,7 @@ class JSONPermute:
         result['operations'] = []
         for pos in self.item['#value'].get('РасшифровкаПлатежа', []):
             temp = {}
-            payment_base_meta = (self.get_meta_by_guid(pos.get('ОснованиеПлатежа', {}) or {}).get('#value'))
+            payment_base_meta = self.get_meta_by_guid(pos.get('УдалитьЗаказ', {}) or {}).get('#value', {}) or self.get_meta_by_guid((pos.get('ОснованиеПлатежа', {}) or {}).get('#value', {}))
             if payment_base_meta:
                 temp['meta'] = payment_base_meta
                 result['operations'].append(temp)
@@ -637,6 +714,7 @@ class JSONPermute:
         result['paymentPurpose'] = ''
         result['description'] = f'Документ создан автоматически на основании {self.item["#value"]["Ref"]}'
         result['group'] = DEFAULT_GROUP
+        result['operations'] = []
         for pos in self.item['#value'].get('РасшифровкаПлатежа', []):
             if not result.get('expenseItem'):
                 if is_guid(pos['СтатьяРасходов']['#value']):
@@ -646,9 +724,12 @@ class JSONPermute:
             new_string = ' '.join([pos['Комментарий'], 'Сумма', str(max(pos['Сумма'], pos.get('СуммаСНДС', 0)))])
             result['paymentPurpose'] = '\n'.join([new_string, result['paymentPurpose']]).strip()
             result['sum'] += int(round(pos.get('СуммаДокумента', 0)*100, 0))
+            operation = self.get_meta_by_guid(pos.get('УдалитьЗаказ', {}) or {}).get('#value', {}) or self.get_meta_by_guid((pos.get('ОснованиеПлатежа', {}) or {}).get('#value', {}))
+            if operation:
+                result['operations'].append({'meta': operation})
         return result
-
-    def permute(self, update_meta=False) -> dict:
+    
+    def permute(self, update_meta=False, **kwargs) -> dict:
         if not self.item:
             return {}
         result = {}
@@ -656,58 +737,66 @@ class JSONPermute:
             result.update(self._permute_organization())
         if self.item_type == 'counterparty':
             result.update(self._permute_counterparty())
+        if self.item_type == 'product':
+            result.update(self._permute_product())
+        if self.item_type == 'service':
+            result.update(self._permute_product())
+        if self.item_type == 'counterparty':
+            result.update(self._permute_counterparty())
+        # if self.item_type == 'counterpartyadjustment':
+        #     result.update(self._permute_counterpartyadjustment())
+        if self.item_type == 'expenseitem':
+            result.update(self._permute_expenseitem())
+        if self.item_type == 'store':
+            result.update(self._permute_store())
+        if self.item_type == 'supply':
+            result.update(self._permute_supply())
+        if self.item_type == 'enter':
+            result.update(self._permute_enter())
+        if self.item_type == 'move':
+            result.update(self._permute_move())
+        if self.item_type == 'purchasereturn':
+            result.update(self._permute_purchasereturn())
+        if self.item_type == 'customerorder':
+            result.update(self._permute_customerorder())
+        if self.item_type == 'demand':
+            result.update(self._permute_demand())
+        if self.item_type == 'salesreturn':
+            result.update(self._permute_salesreturn())
+        if self.item_type == 'loss':
+            result.update(self._permute_loss())
+        if self.item_type == 'paymentin':
+            result.update(self._permute_paymentin())
+        if self.item_type == 'paymentout':
+            result.update(self._permute_paymentout())
+        # if self.item_type == 'cashin':
+        #    result.update(self._permute_cashin())
+        # if self.item_type == 'cashout':
+        #     result.update(self._permute_cashout())
+        if self.item_type == 'retaildemand':
+            result.update(self._permute_retaildemand())
+        if self.item_type == 'supply_from_services_purchase':
+            result.update(self._permute_supply_from_services_purchase())
+        if self.item_type == 'salesreturn_from_retail':
+            result.update(self._permute_salesreturn_from_retail())
+        if self.item_type == 'loss_from_internal':
+            result.update(self._permute_loss_from_internal())
+        if self.item_type == 'paymentin_from_orders':
+            result.update(self._permute_paymentin_from_orders())
+        if self.item_type == 'paymentout_from_orders':
+            result.update(self._permute_paymentout_from_orders())
         if self.item.get('#mywh', {}).get('meta', None) and not update_meta:
             result['meta'] = self.item['#mywh'].get('meta')
-        else:
-            if self.item_type == 'product':
-                result.update(self._permute_product())
-            if self.item_type == 'service':
-                result.update(self._permute_product())
-            if self.item_type == 'counterparty':
-                result.update(self._permute_counterparty())
-            # if self.item_type == 'counterpartyadjustment':
-            #     result.update(self._permute_counterpartyadjustment())
-            if self.item_type == 'expenseitem':
-                result.update(self._permute_expenseitem())
-            if self.item_type == 'store':
-                result.update(self._permute_store())
-            if self.item_type == 'supply':
-                result.update(self._permute_supply())
-            if self.item_type == 'enter':
-                result.update(self._permute_enter())
-            if self.item_type == 'move':
-                result.update(self._permute_move())
-            if self.item_type == 'purchasereturn':
-                result.update(self._permute_purchasereturn())
-            if self.item_type == 'customerorder':
-                result.update(self._permute_customerorder())
-            if self.item_type == 'demand':
-                result.update(self._permute_demand())
-            if self.item_type == 'salesreturn':
-                result.update(self._permute_salesreturn())
-            if self.item_type == 'loss':
-                result.update(self._permute_loss())
-            if self.item_type == 'paymentin':
-                result.update(self._permute_paymentin())
-            if self.item_type == 'paymentout':
-                result.update(self._permute_paymentout())
-            # if self.item_type == 'cashin':
-            #    result.update(self._permute_cashin())
-            # if self.item_type == 'cashout':
-            #     result.update(self._permute_cashout())
-            if self.item_type == 'retaildemand':
-                result.update(self._permute_retaildemand())
-            if self.item_type == 'payment_out_from_services_purchase':
-                result.update(self._permute_payment_out_from_services_purchase())
-            if self.item_type == 'salesreturn_from_retail':
-                result.update(self._permute_salesreturn_from_retail())
-            if self.item_type == 'loss_from_internal':
-                result.update(self._permute_loss_from_internal())
-            if self.item_type == 'paymentin_from_orders':
-                result.update(self._permute_paymentin_from_orders())
-            if self.item_type == 'paymentout_from_orders':
-                result.update(self._permute_paymentout_from_orders())
-        
+        if kwargs.get('update_items'):
+            to_return = {}
+            for key in result.keys():
+                if key in kwargs.get('update_items') or key == '#mywh':
+                    to_return[key] = result[key]
+            if not self.item['#mywh'].get('meta'):
+                return False
+            to_return['meta'] = self.item['#mywh'].get('meta')
+            return to_return
+
         return result
 
 

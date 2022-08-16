@@ -1,4 +1,3 @@
-from ftplib import error_perm
 import requests
 import os
 import sys
@@ -14,7 +13,7 @@ from logging import DEBUG, INFO
 from ratelimit import limits
 from ratelimit.exception import RateLimitException
 from db_server import CrowdGamesDB
-from utils import JSONPermute
+from utils import JSONPermute, make_error_report_from_log
 
 
 """Нужно будет протестировать изменения в коде и дальше уже пилить заполнение тела для разных запросов и распарса json'a из базы.
@@ -181,7 +180,7 @@ class MyWHAPI:
         res = []
         for item in items:
             perm = JSONPermute(item, schema_name.lower(), self.db)
-            permuted_data = perm.permute(update_meta=kwargs.get('update_meta', False))
+            permuted_data = perm.permute(update_meta=kwargs.get('update_meta', False), update_items=kwargs.get('update_items', False))
             if not permuted_data:
                 continue
             item_ref = item.get('#value', {}).get('Ref')
@@ -203,10 +202,12 @@ class MyWHAPI:
         for ref, resp in zipped_data:
             if resp.get('errors'):
                 err = '\n'.join([x['error'] for x in resp['errors']])
-                basic_logger.error(f'Error occured in response with {ref} item: \n{err}')
+                basic_logger.error(f'Error occured in response with {ref} {next(self.db.find_by_guid(ref))["#type"]} item in {resp}: \n{err}')
                 error_count += 1
                 continue
             meta = resp.get('meta')
+            if not meta and not ref:
+                return 0
             meta['href'] = meta['href'].split('?')[0]
             if meta:
                 update = self.db.update_item(ref, meta)
@@ -240,36 +241,56 @@ class MyWHAPI:
             return [({}, {})]
         start_time = dt.datetime.now()
         href = kwargs.get('path')
-        refs_list = [x[1].get('description', "missed").split(' ')[-1] for x in data]
+        if len(data[0][1]) == 1 and data[0][1].get('description') is None:
+            return [({}, {})]
+        refs_list = [(x[1].get('description', 'missed') or 'missed').split(' ')[-1] for x in data]
         missed_meta = []
         error_count = 0
-        while refs_list:
-            for n, ref in enumerate(refs_list):
-                entity = self.request('GET', path=href, params={'search': ref})
-                if entity.status_code == 200:
-                    entity_json = entity.json()
-                    if entity_json['meta']['size'] == 1:
-                        missed_meta.append((refs_list.pop(n), {'meta': entity_json['rows'][0]['meta']}))
-                        basic_logger.info(f'Succesufully finded meta for {ref}')
-                    elif entity_json['meta']['size'] == 0:
-                        basic_logger.info(f'Did not finded any item with {refs_list.pop(n)}')
-                    else:
-                        if not kwargs.get('drop_duplicates'):
-                            basic_logger.warning(f'For {refs_list.pop(n)} search matched more then 1 entity')
-                        else:
-                            basic_logger.info(f'Deleting duplicates')
-                            self.ctrl_z(path=kwargs.get('path'), params={'limit': str(entity_json['meta']['size']-1), 'search': ref}, next_href=kwargs.get('next_href'))
-                            
+        while href:
+            entity = self.request('GET', path=href, params={'filter':'='.join(['owner', OWNER])})
+            if entity.status_code == 200:
+                entity_json = entity.json()
+                if entity_json['meta'].get('nextHref'):
+                    href = entity_json['meta']['nextHref']
                 else:
-                    basic_logger.warning(f'In restore meta server got {entity.status_code}')
-                    error_count += 1
-                    if error_count >= 45:
-                        break
+                    href = False
+                hashmap = {}
+                for row in entity_json['rows']:
+                    desc_ref = row.get('description', 'fail').split(' ')[-1]
+                    if desc_ref == 'fail':
+                        continue
+                    if hashmap.get(desc_ref):
+                        if kwargs.get('drop_duplicates'):
+                            basic_logger.info(f'Deleting duplicates for {ref}')
+                            delete_resp = self.request('DELETE', row['meta']['href'])
+                            if delete_resp.status_code == 200:
+                                basic_logger.info(f'Succesefully deleted duplicate for {ref}')
+                            else:
+                                basic_logger.info(f'{delete_resp.status_code} while trying to delete {ref}')
+                                error_count += 1                        
+                        else:
+                            basic_logger.warning(f'For {ref} search matched more then 1 entity')
+                            error_count += 1
+                    else:
+                        hashmap[desc_ref] = row['meta']
+                for ref in refs_list:
+                    if hashmap.get(ref):
+                        basic_logger.info(f'Succesufully finded meta for {ref}') 
+                        if kwargs.get('update_meta'):
+                            db_item = next(self.db.find_by_guid(ref))
+                            if db_item['#mywh'].get('meta', {}).get('href', False) != hashmap.get(ref, {}).get('href', None):
+                                missed_meta.append((ref, hashmap.get(ref)))
+                        else:
+                            missed_meta.append((ref, hashmap.get(ref)))                                                                                          
+            else:
+                basic_logger.warning(f'In restore meta server got {entity.status_code}. Try again later.')
+                return [({}, {})]
         
             if dt.datetime.now() - start_time > dt.timedelta(minutes=90):
                 basic_logger.warning(f'Failed to restore meta.')
                 return [({}, {})]
-
+        if not missed_meta:
+            return [({}, {})]
         return missed_meta
 
     
@@ -282,6 +303,8 @@ class MyWHAPI:
             query = {}
         if kwargs.get('skip_existing'):
             query.update({"#mywh": {"$exists": False}})
+        else:
+            query.update({"#mywh": {"$exists": True}})
         if kwargs.get('skip_deleted'):
             query.update({"#value.DeletionMark": False})
         body_schema = self.json_load(f'schemas/{schema.lower()}.json')
@@ -295,6 +318,8 @@ class MyWHAPI:
                 params = {}
             if not data_part:
                 continue
+            if kwargs.get('params'):
+                params.update(kwargs.get('params'))
             response = self.request(method='POST', path=path, data=self.dump_json([x[1] for x in data_part]), params=params)
 
             if response.status_code != 200 or response.status_code is None:
@@ -330,14 +355,6 @@ class MyWHAPI:
 
 
         return error_count
-            
-    # def make_documents_bonds(self, data, entity, **kwargs):
-    #   судя по всему эта хуйня не нужна
-    #     path = REQUEST_LINKS.get(entity)
-    #     if not path:
-    #         return False
-    #     self.request('POST', path=path, data=data, **kwargs) #пока что хуйня, смотри выше как формируются данные
-        
 
     def db_migrate(self, **kwargs):
         for entity, path in REQUEST_LINKS.items():
@@ -373,7 +390,8 @@ class MyWHAPI:
                     response_json = data_to_delete.json()
                 except requests.JSONDecodeError as e:
                     basic_logger.exception(f'{e}', exc_info=True)
-                    return False
+                    errors += 1
+                    continue
                 
                 metas = [{'meta': x['meta']} for x in response_json.get('rows', [])]
                 if metas:
@@ -384,21 +402,23 @@ class MyWHAPI:
                         else:
                             basic_logger.info("\n".join([x.get("info", 'No info') for x in response.json()]))
                             basic_logger.info(f'Удаление завершено с  {errors} ошибками.')
-                            return True
-                        
+                            break
                     elif data_to_delete.status_code == 409:
                         basic_logger.warning('Some object are in use and cannot be deleted.')
-                        return False
+                        errors += 1
+                        break
                     else:
                         basic_logger.info(f'In ctrl_z server give {response.status_code}')
                         errors += 1
                         if errors >= 45:
-                            return False
+                            break
             
                 else:
                     basic_logger.warning(f'Ctrl+z dont find any data in MyWH to delete.')
                     basic_logger.debug(f'Request params: {params}')
-                    return False
+                    break
+
+        return errors
 
     def restore_zipped_meta(self, schema, **kwargs):
         #Полагаю что время выполнения этого на 9к+ реализациях будет оооооооочень долгим....
@@ -407,10 +427,17 @@ class MyWHAPI:
         if kwargs.get('data'):
             refs_list = kwargs.get('data')
         else:
-            refs_list = [(None, {'description': x.get('#value', {}).get('Ref')}) for x in self.db.get_items(item_type, {"#type": body_schema["#type"], "#mywh": {"$exists": False}})]
+            if kwargs.get('query'):
+                query = kwargs.get('query')
+                query.update({"#type": body_schema["#type"], "#mywh": {"$exists": kwargs.get('update_meta', False)}})
+            db_result = self.db.get_items(item_type, query)    
+            refs_list = [(None, {'description': x.get('#value', {}).get('Ref')}) for x in db_result]
         zipped_meta = self.restore_meta(refs_list, **kwargs)
+       
         errors = self.update_db_metas(zipped_meta)
         basic_logger.info(f'Attemp to resore meta in DB end with {errors} errors.')
+
+        return errors
 
     def compare_exist_entitys(self, **kwargs):
 
@@ -426,7 +453,8 @@ class MyWHAPI:
                         self.db.update_item(kwargs.get('guids')[n], response.json()['meta'])
                 else:
                     basic_logger.warning(f'Something goes wrong. Server get back {response.status_code}')
-        
+    
+    
 
 if __name__ =='__main__':
     basic_logger = setup_logger('basic_logger', 'logs/my_wh_api.log', DEBUG)
@@ -434,26 +462,35 @@ if __name__ =='__main__':
     request_logger = setup_logger('request_logger', f"logs/{dt.datetime.now().strftime('%Y-%m-%d')}_request.log", DEBUG)
     db_logger = setup_logger('db_logger', 'logs/MongoDB_log.log', level=INFO)
     basic_logger.info('Start logging session.')
+    start_time = dt.datetime.now()
     database = CrowdGamesDB(db='CrowdGamesActual')
     mywh = MyWHAPI(USERNAME, PSWD, database, headers=HEADERS, max_data_size=MAX_DATA_SIZE, max_item_count=MAX_ITEM_COUNT, timeout_time=TIMEOUT_TIME)
     #response = mywh.get_products(params={'pathName':['Товары интернет-магазинов/Настольные игры/CrowdGames']})
     #mywh.json_to_excel(json.dumps(response), columns=['id', 'name', 'article'])
-    a = input('Migrate - press M, go back - B, Restore zipped_meta - R, L - load goods.\n')
+    a = input('Migrate - press M, go back - B, Restore zipped_meta - R, L - load goods, restore all - a.\n')
     if a =='m':
-        mywh.db_migrate(only_posted_documents=True, skip_existing=True, skip_deleted=True)
+        mywh.db_migrate(only_posted_documents=True, skip_existing=True, skip_deleted=True) #, update_items=['description', 'operations', 'paymentPurpose'], params={'filter':'paymentPurpose=;'}
     if a =='b':
-        mywh.ctrl_z('/entity/supply', params={"limit": '500', 'filter':'='.join(['owner', OWNER])})
+        mywh.ctrl_z('/entity/paymentin', params={"limit": '500', 'filter':'='.join(['owner', OWNER])}, next_href=True)
     if a =='r':
         #data = mywh.json_load('Data/Missed_meta_2022-08-09.json')
-        schema = 'MOVE'
-        mywh.restore_zipped_meta(schema=schema, path=f'/entity/{schema.lower()}', drop_duplicates=False, next_href=True)
+        schema = 'PAYMENTIN'
+        mywh.restore_zipped_meta(schema=schema, path=f'/entity/{schema.lower()}', drop_duplicates=False, next_href=True, query={"#value.Posted": True})
     if a == 'l':
-        
         for data_path, entity, item_type in zip(['Data/Compare.json'], ['/entity/product'], ["jcfg:CatalogObject.Номенклатура"]):
             data = mywh.json_load(data_path)
             
             mywh.compare_exist_entitys(data=data, entity=entity, collection='Справочники', item_type=item_type, search_field='#value.Description')
-            # for guid, value in data.items():
-
-            #     mywh.db.update_item(guid, value)
+    if a == 'a':
+        for value in REQUEST_LINKS.keys():
+            mywh.restore_zipped_meta(schema=value, path=f'/entity/{value.lower()}', drop_duplicates=True, next_href=True, query={"#value.Posted": True}, update_meta=True)
     basic_logger.info('Finish')
+    a = input('Make error reports? y/n\n')
+    if a =='y':
+        make_error_report_from_log('logs/my_wh_api.log', start_time, database)
+        make_error_report_from_log('logs/2022-08-15_json.log', start_time)
+        make_error_report_from_log('logs/2022-08-15_request.log', start_time)
+        make_error_report_from_log('logs/MongoDB_log.log',start_time)
+        
+    
+    

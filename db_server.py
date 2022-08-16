@@ -3,13 +3,13 @@ import pip
 import pymongo as pm
 import os
 import json
-
 from pymongo import MongoClient, InsertOne
 from requests import JSONDecodeError
 from logger import setup_logger
 from logging import DEBUG, INFO
 from utils import is_guid
 from setup import COLLECTIONS_COMPARE
+
 
 
 db_logger = setup_logger('db_logger', 'logs/MongoDB_log.log', level=INFO)
@@ -24,6 +24,7 @@ def get_readed_files(log_file='logs/MongoDB_log.log'):
                 w_dir = line.split(' ')[-1].strip().split('\\')
             if '.json was readed' in line:
                 yield os.path.join(*w_dir, line.split(' ')[-3])
+
 
 class CrowdGamesDB:
 
@@ -168,37 +169,14 @@ class CrowdGamesDB:
                     db_logger.info(f'Something goes wrong with {ref["#value"].get("Ref")} delete from {collection}.')
                     db_logger.exception(f'{e}', exc_info=True)
 
+
+
+
+
 if __name__ == '__main__':
-    duplicates_pipeline = [
-    {
-        '$group': {
-            '_id': '$#value.Ref', 
-            'count': {
-                '$sum': 1
-            }
-        }
-    }, {
-        '$match': {
-            '_id': {
-                '$ne': None
-            }
-        }
-    }, {
-        '$match': {
-            'count': {
-                '$gt': 1
-            }
-        }
-    }, {
-        '$project': {
-            '#value.Ref': '$_id', 
-            '_id': 0
-        }
-    }
-]
     inst = CrowdGamesDB('CrowdGamesActual')
     #inst.import_db(skip_exists_ref=True, read_directorys=['Справочники'], db_path='D:\Никита\Работа\CrowdGames\Kek')
-    inst.delete_all_mywh(query={"#type": "jcfg:DocumentObject.ПриобретениеТоваровУслуг"}) #{"#type": {"$in":["jcfg:DocumentObject.РеализацияТоваровУслуг", "jcfg:DocumentObject.ПоступлениеБезналичныхДенежныхСредств", "jcfg:DocumentObject.СписаниеНедостачТоваров", "jcfg:DocumentObject.СписаниеБезналичныхДенежныхСредств", "jcfg:DocumentObject.СписаниеБезналичныхДенежныхСредств"]}})
+    #inst.delete_all_mywh(query={"#type": {"$in":["jcfg:DocumentObject.ПриходныйКассовыйОрдер", "jcfg:DocumentObject.СписаниеБезналичныхДенежныхСредств", "jcfg:DocumentObject.ПоступлениеБезналичныхДенежныхСредств", "jcfg:DocumentObject.РасходныйКассовыйОрдер"]}}) #{"#type": {"$in":["jcfg:DocumentObject.РеализацияТоваровУслуг", "jcfg:DocumentObject.ПоступлениеБезналичныхДенежныхСредств", "jcfg:DocumentObject.СписаниеНедостачТоваров", "jcfg:DocumentObject.СписаниеБезналичныхДенежныхСредств", "jcfg:DocumentObject.СписаниеБезналичныхДенежныхСредств"]}})
    # inst.drop_duplicates_by_ref('ПланыВидовХарактеристик', duplicates_pipeline)
     #inst.update_item("7a6c6eee-fb57-11e7-80d6-00505691ab3c", 'loshad')
     print('Success')
